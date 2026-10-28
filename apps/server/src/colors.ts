@@ -1,17 +1,8 @@
+import { AVATAR_COLORS } from '@grok-office/shared';
+
 // Fixed bot palette, picked by a hash of the bot id.
-const PALETTE = [
-  // The avatar colors Grok Bot uses, then two extras.
-  '#FFFFFF', // white
-  '#FF2340', // red
-  '#9B5CFF', // purple
-  '#00C774', // green
-  '#FF9800', // amber
-  '#00BBA8', // teal
-  '#FF6A00', // orange
-  '#1585FF', // blue
-  '#F472B6', // pink
-  '#FACC15', // yellow
-];
+// The avatar colors of Grok Bot's picker.
+const PALETTE: string[] = Object.values(AVATAR_COLORS);
 
 /** Hash-picked palette color; on a clash with a bot already in the office, the next free one. */
 export function botColor(id: string, taken: Iterable<string> = []): string {

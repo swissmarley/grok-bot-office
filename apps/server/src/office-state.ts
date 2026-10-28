@@ -1,4 +1,4 @@
-import { DESKS_PER_ROW, type Approval, type Bot, type OfficeEvent } from '@grok-office/shared';
+import { AVATAR_FIXED_COLORS, DESKS_PER_ROW, type Approval, type Bot, type OfficeEvent } from '@grok-office/shared';
 import type { Thresholds } from './config.js';
 import { TASK_TITLE_MAX_CHARS } from './config.js';
 import { botColor } from './colors.js';
@@ -126,6 +126,8 @@ export class OfficeState {
     if (update.name !== undefined) bot.name = update.name;
     if (update.color !== undefined) bot.color = update.color;
     if (update.avatar !== undefined) bot.avatar = update.avatar;
+    const fixed = bot.avatar && AVATAR_FIXED_COLORS[bot.avatar.shape];
+    if (fixed) bot.color = fixed;
     if (update.activity !== undefined) bot.activity = update.activity;
     if (update.unread !== undefined) bot.unread = update.unread;
     if (update.signals) entry.signals = { ...entry.signals, ...update.signals };

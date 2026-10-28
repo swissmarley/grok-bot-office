@@ -1,20 +1,21 @@
 import type { AvatarShape } from '@grok-office/shared';
 
-// Grok Bot avatar silhouettes, rebuilt procedurally from the app's look: soft
-// colored blobs with two slanted oval eyes. One outline per shape, in unit space
-// (y up, fits in [-1, 1]), shared by the 2D icon and the extruded 3D figure.
+// Grok Bot avatar silhouettes, rebuilt procedurally from the app's "Create New Bot"
+// picker: soft colored blobs with two slanted capsule eyes. One outline per shape, in
+// unit space (y up, fits in [-1, 1]), shared by the 2D icon and the extruded 3D figure.
 
 export type Pt = [number, number];
 
 export interface AvatarGeometry {
   outline: Pt[];
-  /** Eye centers; eyes are ovals of EYE.rx × EYE.ry rotated by EYE.tilt. */
+  /** Eye centers; eyes are capsules of EYE.rx × EYE.ry rotated by `eyeTilt` (default EYE.tilt). */
   eyes: [Pt, Pt];
+  eyeTilt?: number;
   /** Pumpkin stem, drawn darker on top of the outline. */
   stem?: Pt[];
 }
 
-export const EYE = { rx: 0.078, ry: 0.19, tilt: 0.4 };
+export const EYE = { rx: 0.095, ry: 0.22, tilt: 0.42 };
 
 const TAU = Math.PI * 2;
 
@@ -75,14 +76,60 @@ function fit(pts: Pt[]): { pts: Pt[]; map: (p: Pt) => Pt } {
 const angleDiff = (a: number, b: number) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 const bump = (t: number, at: number, width: number) => Math.exp(-((angleDiff(t, at) / width) ** 2));
 
+/** Outline of a union of circles [cx, cy, r] (the origin must be inside), notches softened. */
+function circles(cs: [number, number, number][]): Pt[] {
+  const raw = polar((t) => {
+    const c = Math.cos(t);
+    const s = Math.sin(t);
+    let far = 0;
+    for (const [cx, cy, r] of cs) {
+      const p = cx * c + cy * s;
+      const disc = r * r - (cx * cx + cy * cy - p * p);
+      if (disc >= 0) far = Math.max(far, p + Math.sqrt(disc));
+    }
+    return far;
+  }, 240);
+  return chaikin(raw.filter((_, i) => i % 4 === 0), 3);
+}
+
+/** Capsule of length 2 and height h. */
+function pill(h: number): Pt[] {
+  const r = h / 2;
+  const pts: Pt[] = [];
+  for (let i = 0; i <= 24; i++) {
+    const a = -Math.PI / 2 + (i / 24) * Math.PI;
+    pts.push([1 - r + Math.cos(a) * r, Math.sin(a) * r]);
+  }
+  for (let i = 0; i <= 24; i++) {
+    const a = Math.PI / 2 + (i / 24) * Math.PI;
+    pts.push([-1 + r + Math.cos(a) * r, Math.sin(a) * r]);
+  }
+  return pts;
+}
+
 function build(shape: AvatarShape): AvatarGeometry {
   switch (shape) {
     case 'round':
-      return { outline: fit(polar(() => 1)).pts, eyes: [[0.02, 0.38], [0.4, 0.42]] };
-    case 'egg': {
-      // A drop with its soft tip up and to the left.
-      const drop = polar((t) => 1 + 0.42 * bump(t, 2.05, 0.55));
-      return { outline: fit(chaikin(drop, 2)).pts, eyes: [[0.2, -0.02], [0.52, 0.02]] };
+      return { outline: fit(polar(() => 1)).pts, eyes: [[0.1, 0.34], [0.5, 0.46]] };
+    case 'cloud':
+      return {
+        outline: fit(circles([[0.15, 0.25, 0.55], [-0.45, 0.18, 0.42], [-0.38, -0.3, 0.44], [0.15, -0.32, 0.5], [0.55, -0.05, 0.44]])).pts,
+        eyes: [[0.0, 0.26], [0.42, 0.32]],
+      };
+    case 'square':
+      return { outline: fit(roundedPolygon(4, Math.PI / 4 + 0.3, 3)).pts, eyes: [[-0.06, 0.06], [0.32, 0.1]] };
+    case 'sparkle':
+      return {
+        outline: fit(polar((t) => 0.6 + 0.4 * Math.abs(Math.cos(2 * (t - 0.22))) ** 1.8)).pts,
+        eyes: [[-0.06, 0.14], [0.3, 0.2]],
+      };
+    case 'clover': {
+      const d = 0.42;
+      const lobes = [0, 1, 2, 3].map((i): [number, number, number] => {
+        const a = Math.PI / 4 + 0.15 + (i * Math.PI) / 2;
+        return [Math.cos(a) * d, Math.sin(a) * d, 0.5];
+      });
+      return { outline: fit(circles([...lobes, [0, 0, 0.5]])).pts, eyes: [[-0.1, 0.08], [0.3, 0.14]] };
     }
     case 'heart': {
       const heart = Array.from({ length: 160 }, (_, i): Pt => {
@@ -97,24 +144,34 @@ function build(shape: AvatarShape): AvatarGeometry {
         return [x * k, y * k];
       });
       // Resample coarsely, then smooth: rounds off the cusp at the tip.
-      const coarse = chubby.filter((_, i) => i % 8 === 0);
-      return { outline: fit(rotate(chaikin(coarse, 4), 0.45)).pts, eyes: [[0.1, 0.06], [0.4, 0.08]] };
+      const coarse = chubby.filter((_, i) => i % 10 === 0);
+      return { outline: fit(rotate(chaikin(coarse, 4), 0.45)).pts, eyes: [[0.14, 0.1], [0.5, 0.16]] };
     }
-    case 'flower':
+    case 'flower': {
+      const lobes = Array.from({ length: 8 }, (_, i): [number, number, number] => {
+        const a = 0.2 + (i / 8) * TAU;
+        return [Math.cos(a) * 0.6, Math.sin(a) * 0.6, 0.4];
+      });
+      return { outline: fit(circles([...lobes, [0, 0, 0.66]])).pts, eyes: [[-0.02, 0.08], [0.36, 0.14]] };
+    }
+    case 'drop': {
+      // A drop with its soft tip up and to the left.
+      const drop = polar((t) => 1 + 0.42 * bump(t, 2.05, 0.55));
+      return { outline: fit(chaikin(drop, 2)).pts, eyes: [[0.12, 0.16], [0.48, 0.24]] };
+    }
+    case 'pill':
+      return { outline: fit(rotate(pill(1.4), 0.24)).pts, eyes: [[0.0, 0.16], [0.44, 0.26]] };
+    case 'triangle':
+      return { outline: fit(roundedPolygon(3, -0.3, 2)).pts, eyes: [[-0.1, 0.2], [0.22, 0.24]], eyeTilt: 1.0 };
+    case 'pentagon':
+      return { outline: fit(roundedPolygon(5, Math.PI / 2 + 0.35, 3)).pts, eyes: [[-0.14, 0.04], [0.22, 0.1]] };
+    case 'splat':
       return {
         outline: fit(polar((t) => 0.84 + 0.14 * Math.cos(7 * (t - 0.3)) + 0.03 * Math.cos(2 * t))).pts,
-        eyes: [[0.08, 0.08], [0.36, 0.1]],
-      };
-    case 'triangle':
-      return { outline: fit(roundedPolygon(3, 0.08, 2)).pts, eyes: [[-0.06, 0.36], [0.22, 0.4]] };
-    case 'clover':
-      return {
-        // Four round lobes on the diagonals, like a cloud.
-        outline: fit(polar((t) => 0.76 + 0.24 * Math.abs(Math.cos(2 * (t - Math.PI / 4))) ** 0.7)).pts,
-        eyes: [[-0.04, 0.0], [0.26, 0.04]],
+        eyes: [[-0.04, 0.08], [0.32, 0.14]],
       };
     case 'hexagon':
-      return { outline: fit(roundedPolygon(6, 0.28, 6)).pts, eyes: [[0.02, -0.06], [0.34, -0.04]] };
+      return { outline: fit(roundedPolygon(6, 0.28, 4)).pts, eyes: [[-0.16, 0.12], [0.3, 0.18]] };
     case 'pumpkin': {
       const raw = polar((t) => {
         const base = 1 / Math.hypot(Math.cos(t) / 1.04, Math.sin(t) / 0.92);
@@ -124,7 +181,7 @@ function build(shape: AvatarShape): AvatarGeometry {
       const stem: Pt[] = (
         [[-0.08, 0.7], [0.06, 0.72], [-0.02, 1.0], [-0.22, 1.12], [-0.3, 1.02], [-0.14, 0.94]] as Pt[]
       ).map(map);
-      return { outline: pts, eyes: [[0.24, 0.12], [0.52, 0.14]], stem };
+      return { outline: pts, eyes: [[0.14, 0.2], [0.56, 0.3]], stem };
     }
   }
 }

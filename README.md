@@ -27,7 +27,8 @@ Mock options (environment variables):
 - `GBO_MOCK_SHOWCASE=1` pins one bot in each state, to check the scene.
 
 The scene draws each bot as its Grok Bot avatar (shape + color), rebuilt from
-primitives in `apps/web/src/avatar/shapes.ts`.
+primitives in `apps/web/src/avatar/shapes.ts`: the 14 shapes and 11 colors of
+Grok Bot's "Create New Bot" picker.
 
 ```sh
 pnpm test        # server unit tests

@@ -15,9 +15,11 @@ export interface Bot {
   avatar?: BotAvatar;                       // aggiunta: forma dell'avatar di Grok Bot (il colore è `color`)
 }
 
-/** Avatar silhouettes seen in Grok Bot; the office draws them in 2D (panels) and 3D (scene). */
+/** The 14 avatar shapes of Grok Bot's "Create New Bot" picker, in its order. */
 export type AvatarShape =
-  | 'round' | 'egg' | 'heart' | 'flower' | 'triangle' | 'clover' | 'hexagon' | 'pumpkin';
+  | 'round' | 'cloud' | 'square' | 'sparkle' | 'clover'
+  | 'heart' | 'flower' | 'drop' | 'pill' | 'triangle'
+  | 'pentagon' | 'splat' | 'hexagon' | 'pumpkin';
 
 export interface BotAvatar {
   shape: AvatarShape;
@@ -50,8 +52,30 @@ export const BOT_STATUSES: readonly BotStatus[] = [
 ];
 
 export const AVATAR_SHAPES: readonly AvatarShape[] = [
-  'round', 'egg', 'heart', 'flower', 'triangle', 'clover', 'hexagon', 'pumpkin',
+  'round', 'cloud', 'square', 'sparkle', 'clover',
+  'heart', 'flower', 'drop', 'pill', 'triangle',
+  'pentagon', 'splat', 'hexagon', 'pumpkin',
 ];
+
+/** The 11 avatar colors of the same picker, in its order. */
+export const AVATAR_COLORS = {
+  white: '#FFFFFF',
+  brown: '#936439',
+  red: '#FF263C',
+  orange: '#FF6700',
+  amber: '#FF9800',
+  green: '#00C972',
+  teal: '#00BCA6',
+  blue: '#1084FE',
+  purple: '#9159FE',
+  pink: '#FF309B',
+  gray: '#777777',
+} as const;
+
+/** Shapes that keep their own color whatever color is picked. */
+export const AVATAR_FIXED_COLORS: Partial<Record<AvatarShape, string>> = {
+  pumpkin: AVATAR_COLORS.orange,
+};
 
 export const WORKING_STATUSES: readonly BotStatus[] = ['coding', 'browsing', 'terminal', 'thinking'];
 

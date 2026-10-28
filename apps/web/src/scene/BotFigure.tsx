@@ -244,7 +244,7 @@ export function BotFigure({ bot, reduced }: { bot: Bot; reduced: boolean }) {
               <meshStandardMaterial color={bodyColor} roughness={0.45} emissive={bodyColor} emissiveIntensity={0.14} />
             </mesh>
             {geo.eyes.map(([x, y]) => (
-              <mesh key={x} position={[x, y, FRONT_Z - 0.02]} rotation={[0, 0, EYE.tilt]} scale={[1, eyeScaleY, 0.35]}>
+              <mesh key={x} position={[x, y, FRONT_Z - 0.02]} rotation={[0, 0, geo.eyeTilt ?? EYE.tilt]} scale={[1, eyeScaleY, 0.35]}>
                 <capsuleGeometry args={[EYE.rx, 2 * (EYE.ry - EYE.rx), 4, 10]} />
                 <meshBasicMaterial color="#111111" />
               </mesh>

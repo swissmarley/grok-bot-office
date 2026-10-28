@@ -11,7 +11,7 @@ export function AvatarIcon({ shape, color, size = 32, closedEyes = false }: {
   closedEyes?: boolean;
 }) {
   const geo = avatarGeometry(shape);
-  const deg = (-EYE.tilt * 180) / Math.PI;
+  const deg = (-(geo.eyeTilt ?? EYE.tilt) * 180) / Math.PI;
   return (
     <svg aria-hidden width={size} height={size} viewBox="-1.15 -1.15 2.3 2.3" className="shrink-0">
       {geo.stem && <path d={svgPath(geo.stem)} fill={STEM_COLOR} />}

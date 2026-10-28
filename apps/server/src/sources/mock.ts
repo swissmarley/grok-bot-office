@@ -1,4 +1,4 @@
-import type { Approval, BotAvatar, Task } from '@grok-office/shared';
+import { AVATAR_COLORS, type Approval, type BotAvatar, type Task } from '@grok-office/shared';
 import type { Thresholds } from '../config.js';
 import type { BotSignals, BotSource, SourceSink, ToolKind } from './source.js';
 
@@ -21,16 +21,22 @@ type Phase =
   | { kind: 'rest'; ms: number }
   | { kind: 'asleep'; ms: number };
 
-/** Avatars in the style of Grok Bot's, one per mock bot (cycled for copies). */
+/** Grok Bot avatars for the mock bots (cycled for copies and the showcase). */
 const MOCK_AVATARS: { color: string; avatar: BotAvatar }[] = [
-  { color: '#1585FF', avatar: { shape: 'egg' } },
-  { color: '#FF2340', avatar: { shape: 'heart' } },
-  { color: '#00C774', avatar: { shape: 'triangle' } },
-  { color: '#00BBA8', avatar: { shape: 'hexagon' } },
-  { color: '#FF9800', avatar: { shape: 'clover' } },
-  { color: '#FFFFFF', avatar: { shape: 'round' } },
-  { color: '#9B5CFF', avatar: { shape: 'flower' } },
-  { color: '#FF6A00', avatar: { shape: 'pumpkin' } },
+  { color: AVATAR_COLORS.blue, avatar: { shape: 'drop' } },
+  { color: AVATAR_COLORS.red, avatar: { shape: 'heart' } },
+  { color: AVATAR_COLORS.green, avatar: { shape: 'triangle' } },
+  { color: AVATAR_COLORS.teal, avatar: { shape: 'hexagon' } },
+  { color: AVATAR_COLORS.amber, avatar: { shape: 'clover' } },
+  { color: AVATAR_COLORS.white, avatar: { shape: 'round' } },
+  { color: AVATAR_COLORS.purple, avatar: { shape: 'splat' } },
+  { color: AVATAR_COLORS.orange, avatar: { shape: 'pumpkin' } },
+  { color: AVATAR_COLORS.pink, avatar: { shape: 'cloud' } },
+  { color: AVATAR_COLORS.brown, avatar: { shape: 'square' } },
+  { color: AVATAR_COLORS.gray, avatar: { shape: 'sparkle' } },
+  { color: AVATAR_COLORS.purple, avatar: { shape: 'flower' } },
+  { color: AVATAR_COLORS.blue, avatar: { shape: 'pill' } },
+  { color: AVATAR_COLORS.green, avatar: { shape: 'pentagon' } },
 ];
 
 interface Script {
