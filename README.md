@@ -63,6 +63,18 @@ network, but close it with `grokbot restore` when you're not using the office.
 
 ## Probing the Grok Bot app
 
-`scripts/probe-avatars.mjs` is a read-only look at where the desktop app keeps each
-Bot's avatar (run after `grokbot launch`, then `grokbot restore` to close the debug
-port). It never clicks or calls app actions.
+`scripts/probe-grokbot.mjs` is a read-only look inside the desktop app, to learn what
+the grokbot-bridge fork needs (avatars, main bot, account handle, tool steps, pending
+approvals, store and method names, the Bot computer's sleep phase):
+
+```sh
+grokbot launch
+node scripts/probe-grokbot.mjs > grokbot-probe.json
+grokbot restore
+```
+
+It never clicks or calls app actions; besides reading snapshots it only loads each
+Bot's recent conversation into the transcript store, as `grokbot read` does.
+Conversation text is never printed, only entry kinds, field names and short
+identifier-like values. Run it once more while a Bot has an approval card open to
+capture what a pending approval looks like. Check the file before sharing it.
