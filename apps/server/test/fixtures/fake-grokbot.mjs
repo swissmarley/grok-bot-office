@@ -5,7 +5,8 @@
 //   read-<id>.json output of `read <id> --json`
 //   events.jsonl   lines that `watch --json` streams as they are appended
 //   calls.log      every invocation, with the GROKBOT_APP it got
-import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs';
+//   watch-ready    written once `watch` is streaming
+import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const dir = process.env.FAKE_GROKBOT_DIR;
@@ -39,6 +40,8 @@ switch (cmd) {
   case 'watch': {
     const file = join(dir, 'events.jsonl');
     let offset = existsSync(file) ? statSync(file).size : 0;
+    // Tests wait for this before appending, since a watch only streams what comes after it starts.
+    writeFileSync(join(dir, 'watch-ready'), String(process.pid));
     setInterval(() => {
       if (!connected()) {
         console.error('grokbot: CDP connection closed');

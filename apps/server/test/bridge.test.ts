@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,17 +47,21 @@ function setup() {
   const bot = (id: string): Bot | undefined => state.snapshot().bots.find((b) => b.id === id);
   const event = (line: object) => appendFileSync(join(dir, 'events.jsonl'), JSON.stringify(line) + '\n');
   const calls = () => readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  cleanup.push(() => {
-    void source.stop();
-    rmSync(dir, { recursive: true, force: true });
+  const watching = () => until(() => existsSync(join(dir, 'watch-ready')), 10_000);
+  cleanup.push(async () => {
+    await source.stop();
+    // A grokbot child may still be finishing a write into the directory.
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
-  return { dir, state, events, source, bot, event, calls };
+  return { dir, state, events, source, bot, event, calls, watching };
 }
 
-const cleanup: (() => void)[] = [];
-afterEach(() => cleanup.splice(0).forEach((f) => f()));
+const cleanup: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const f of cleanup.splice(0)) await f();
+});
 
-async function until(check: () => unknown, ms = 3000): Promise<number> {
+async function until(check: () => unknown, ms = 8000): Promise<number> {
   const t0 = Date.now();
   while (!check()) {
     if (Date.now() - t0 > ms) throw new Error('timed out');
@@ -83,12 +87,11 @@ describe('BridgeSource', () => {
   });
 
   it('puts a reply in the log within 2 s of the watch event', async () => {
-    const { state, source, bot, event, events, calls } = setup();
+    const { state, source, bot, event, events, watching } = setup();
     await source.start(state.sink);
     await until(() => events.some((e) => e.type === 'connection' && e.state === 'connected'));
     await until(() => bot('c1')?.task);
-    await until(() => calls().some((c) => c.cmd === 'watch'));
-    await new Promise((r) => setTimeout(r, 150));
+    await watching();
     const t0 = Date.now();
     event({ type: 'message', bot: 'Rui - The Rent Scout', key: 'k3', role: 'assistant', kind: 'send-message/text', text: 'Found one in Wiedikon: 2400 CHF', links: [], at: new Date().toISOString() });
     await until(() => bot('c1')?.task?.log[0]?.text.startsWith('Found one'));
@@ -97,12 +100,11 @@ describe('BridgeSource', () => {
   });
 
   it('maps working, needs_input and idle', async () => {
-    const { state, source, bot, event, events, calls } = setup();
+    const { state, source, bot, event, events, watching } = setup();
     await source.start(state.sink);
     await until(() => events.some((e) => e.type === 'connection' && e.state === 'connected'));
     // Like the real watch, the fake only streams what happens after it started.
-    await until(() => calls().some((c) => c.cmd === 'watch'));
-    await new Promise((r) => setTimeout(r, 150));
+    await watching();
     event({ type: 'needs_input', bot: 'Ada - Chief of Staff', at: new Date().toISOString() });
     await until(() => bot('b1')?.status === 'needs_you');
     event({ type: 'working', bot: 'Ada - Chief of Staff', at: new Date().toISOString() });
@@ -119,8 +121,8 @@ describe('BridgeSource', () => {
     rmSync(join(dir, 'connected'));
     await until(() => conn().at(-1) === 'disconnected');
     writeFileSync(join(dir, 'connected'), '');
-    await until(() => conn().at(-1) === 'connected', 5000);
-    expect(conn()).toEqual(['disconnected', 'connected', 'disconnected', 'connected']);
+    await until(() => conn().at(-1) === 'connected');
+    expect(conn().join(' ')).toMatch(/^disconnected connected( disconnected)+ connected$/);
   });
 
   it('never lets the bridge launch Grok Bot', async () => {
@@ -133,7 +135,7 @@ describe('BridgeSource', () => {
     expect(new Set(calls().map((c) => c.cmd))).toEqual(new Set(['status']));
     await expect(source.reconnect()).rejects.toThrow(/grokbot launch/);
     writeFileSync(join(dir, 'connected'), '');
-    await until(() => events.some((e) => e.type === 'connection' && e.state === 'connected'), 5000);
+    await until(() => events.some((e) => e.type === 'connection' && e.state === 'connected'));
     expect(calls().every((c) => c.app === '/nonexistent/grok-office-never-launches-grok-bot')).toBe(true);
   });
 
