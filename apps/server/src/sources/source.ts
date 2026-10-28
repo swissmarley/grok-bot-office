@@ -1,4 +1,4 @@
-import type { Approval, Task } from '@grok-office/shared';
+import type { Approval, BotAvatar, Task } from '@grok-office/shared';
 
 /** Kind of the tool a working bot is using, when the source can tell. */
 export type ToolKind = 'editor' | 'file' | 'git' | 'browser' | 'shell';
@@ -21,6 +21,9 @@ export interface BotSignals {
 export interface SourceBotUpdate {
   name?: string;
   description?: string;
+  /** The bot's avatar color in Grok Bot; without it the office picks one from its palette. */
+  color?: string;
+  avatar?: BotAvatar;
   signals?: Partial<BotSignals>;
   activity?: string;
   unread?: number;

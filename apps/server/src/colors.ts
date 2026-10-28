@@ -1,15 +1,16 @@
 // Fixed bot palette, picked by a hash of the bot id.
 const PALETTE = [
+  // The avatar colors Grok Bot uses, then two extras.
+  '#FFFFFF', // white
+  '#FF2340', // red
+  '#9B5CFF', // purple
+  '#00C774', // green
+  '#FF9800', // amber
+  '#00BBA8', // teal
+  '#FF6A00', // orange
+  '#1585FF', // blue
   '#F472B6', // pink
-  '#FB923C', // orange
   '#FACC15', // yellow
-  '#A3E635', // lime
-  '#38BDF8', // sky
-  '#818CF8', // indigo
-  '#E879F9', // fuchsia
-  '#2DD4BF', // teal
-  '#F87171', // coral
-  '#C4B5FD', // lavender
 ];
 
 /** Hash-picked palette color; on a clash with a bot already in the office, the next free one. */

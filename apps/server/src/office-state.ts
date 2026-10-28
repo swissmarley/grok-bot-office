@@ -124,6 +124,8 @@ export class OfficeState {
   private apply(entry: Entry, update: SourceBotUpdate): void {
     const { bot } = entry;
     if (update.name !== undefined) bot.name = update.name;
+    if (update.color !== undefined) bot.color = update.color;
+    if (update.avatar !== undefined) bot.avatar = update.avatar;
     if (update.activity !== undefined) bot.activity = update.activity;
     if (update.unread !== undefined) bot.unread = update.unread;
     if (update.signals) entry.signals = { ...entry.signals, ...update.signals };

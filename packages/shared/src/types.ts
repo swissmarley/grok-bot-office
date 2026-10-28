@@ -1,5 +1,6 @@
-// Office data model. Bot, Task, Approval and OfficeEvent mirror SPEC.md exactly;
-// the server normalizes every source into these and the browser sees nothing else.
+// Office data model. Bot, Task, Approval and OfficeEvent mirror SPEC.md, plus the
+// optional Bot.avatar; the server normalizes every source into these and the browser
+// sees nothing else.
 
 export type BotStatus =
   | 'coding' | 'browsing' | 'terminal' | 'thinking'
@@ -11,6 +12,15 @@ export interface Bot {
   status: BotStatus; activity: string;      // es. "Reading 9 pricing pages"
   unread: number; updatedAt: string;
   task?: Task; approval?: Approval;
+  avatar?: BotAvatar;                       // aggiunta: forma dell'avatar di Grok Bot (il colore è `color`)
+}
+
+/** Avatar silhouettes seen in Grok Bot; the office draws them in 2D (panels) and 3D (scene). */
+export type AvatarShape =
+  | 'round' | 'egg' | 'heart' | 'flower' | 'triangle' | 'clover' | 'hexagon' | 'pumpkin';
+
+export interface BotAvatar {
+  shape: AvatarShape;
 }
 
 export interface Task {
@@ -37,6 +47,10 @@ export type OfficeEvent =
 export const BOT_STATUSES: readonly BotStatus[] = [
   'coding', 'browsing', 'terminal', 'thinking',
   'needs_you', 'error', 'done', 'idle', 'sleeping',
+];
+
+export const AVATAR_SHAPES: readonly AvatarShape[] = [
+  'round', 'egg', 'heart', 'flower', 'triangle', 'clover', 'hexagon', 'pumpkin',
 ];
 
 export const WORKING_STATUSES: readonly BotStatus[] = ['coding', 'browsing', 'terminal', 'thinking'];

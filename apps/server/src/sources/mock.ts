@@ -1,6 +1,6 @@
-import type { Approval, Task } from '@grok-office/shared';
+import type { Approval, BotAvatar, Task } from '@grok-office/shared';
 import type { Thresholds } from '../config.js';
-import type { BotSource, SourceSink, ToolKind } from './source.js';
+import type { BotSignals, BotSource, SourceSink, ToolKind } from './source.js';
 
 // Scripted bots that loop through every office state. Durations are in real
 // milliseconds; the office runs mock mode with compressed thresholds so that
@@ -20,6 +20,18 @@ type Phase =
     }
   | { kind: 'rest'; ms: number }
   | { kind: 'asleep'; ms: number };
+
+/** Avatars in the style of Grok Bot's, one per mock bot (cycled for copies). */
+const MOCK_AVATARS: { color: string; avatar: BotAvatar }[] = [
+  { color: '#1585FF', avatar: { shape: 'egg' } },
+  { color: '#FF2340', avatar: { shape: 'heart' } },
+  { color: '#00C774', avatar: { shape: 'triangle' } },
+  { color: '#00BBA8', avatar: { shape: 'hexagon' } },
+  { color: '#FF9800', avatar: { shape: 'clover' } },
+  { color: '#FFFFFF', avatar: { shape: 'round' } },
+  { color: '#9B5CFF', avatar: { shape: 'flower' } },
+  { color: '#FF6A00', avatar: { shape: 'pumpkin' } },
+];
 
 interface Script {
   id: string;
@@ -160,6 +172,8 @@ export interface MockSourceOptions {
   scripts?: Script[];
   /** How many bots to run; beyond the five scripts, copies like "Scout 2". */
   count?: number;
+  /** One bot pinned in each state, for checking the scene. */
+  showcase?: boolean;
 }
 
 export class MockSource implements BotSource {
@@ -174,8 +188,15 @@ export class MockSource implements BotSource {
 
   async start(sink: SourceSink): Promise<void> {
     sink.connection('connected', '@mock');
-    for (const script of withCopies(this.opts.scripts ?? MOCK_SCRIPTS, this.opts.count)) {
-      sink.updateBot(script.id, { name: script.name, description: script.description, activity: 'Waiting for a task' });
+    if (this.opts.showcase) return showcase(sink, this.opts.thresholds);
+    const scripts = withCopies(this.opts.scripts ?? MOCK_SCRIPTS, this.opts.count);
+    for (const [i, script] of scripts.entries()) {
+      sink.updateBot(script.id, {
+        name: script.name,
+        description: script.description,
+        ...MOCK_AVATARS[i % MOCK_AVATARS.length]!,
+        activity: 'Waiting for a task',
+      });
       this.runBot(sink, script);
     }
   }
@@ -298,6 +319,32 @@ export class MockSource implements BotSource {
   private jitter(ms: number): number {
     return Math.round(ms * (0.85 + this.rand() * 0.3));
   }
+}
+
+const SHOWCASE: { name: string; activity: string; signals: Partial<BotSignals>; idleMin?: number }[] = [
+  { name: 'Coder', activity: 'Editing checkout.ts', signals: { working: true, tool: 'editor' } },
+  { name: 'Surfer', activity: 'Reading 9 pricing pages', signals: { working: true, tool: 'browser' } },
+  { name: 'Shell', activity: 'Running the test suite', signals: { working: true, tool: 'shell' } },
+  { name: 'Thinker', activity: 'Planning the launch', signals: { working: true, tool: null } },
+  { name: 'Asker', activity: 'Waiting for you: Post thread', signals: { needsInput: true } },
+  { name: 'Oops', activity: '2 tests failing', signals: { working: true, error: true } },
+  { name: 'Finisher', activity: 'Finished: Weekly report', signals: {}, idleMin: 0 },
+  { name: 'Idler', activity: 'Waiting for a task', signals: {}, idleMin: 15 },
+  { name: 'Sleeper', activity: 'Computer asleep', signals: { computerAsleep: true } },
+];
+
+function showcase(sink: SourceSink, t: Thresholds): void {
+  SHOWCASE.forEach((b, i) => {
+    const id = `show-${b.name.toLowerCase()}`;
+    const ago = b.idleMin === undefined ? undefined : new Date(Date.now() - (b.idleMin * 60_000) / (600_000 / t.doneMs)).toISOString();
+    sink.updateBot(id, {
+      name: b.name,
+      description: 'Showcase bot',
+      ...MOCK_AVATARS[i % MOCK_AVATARS.length]!,
+      activity: b.activity,
+      signals: { working: false, needsInput: false, error: false, computerAsleep: false, lastReplyAt: ago, ...b.signals },
+    });
+  });
 }
 
 function withCopies(scripts: Script[], count = scripts.length): Script[] {

@@ -21,7 +21,21 @@ swapped for an httpOnly cookie and removed from the address bar).
 - Web UI (Vite): `127.0.0.1:5173`, proxied to the server.
 - State on disk: `~/.grok-office/desks.json` (mock mode: `desks.mock.json`).
 
+Mock options (environment variables):
+
+- `GBO_MOCK_BOTS=12` runs more bots (copies of the five scripts).
+- `GBO_MOCK_SHOWCASE=1` pins one bot in each state, to check the scene.
+
+The scene draws each bot as its Grok Bot avatar (shape + color), rebuilt from
+primitives in `apps/web/src/avatar/shapes.ts`.
+
 ```sh
 pnpm test        # server unit tests
 pnpm typecheck
 ```
+
+## Probing the Grok Bot app
+
+`scripts/probe-avatars.mjs` is a read-only look at where the desktop app keeps each
+Bot's avatar (run after `grokbot launch`, then `grokbot restore` to close the debug
+port). It never clicks or calls app actions.

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Bot, OfficeEvent } from '@grok-office/shared';
 
 export type Link = 'connecting' | 'open' | 'closed' | 'unauthorized';
+export type TimeOfDay = 'now' | 'day' | 'evening' | 'night';
 
 export interface FeedItem {
   id: number;
@@ -18,8 +19,17 @@ interface OfficeStore {
   /** Browser ↔ office server socket. */
   link: Link;
   feed: FeedItem[];
+  selectedId: string | null;
+  hoveredId: string | null;
+  timeOfDay: TimeOfDay;
+  /** Show every bot's speech bubble. */
+  allTasks: boolean;
   apply(event: OfficeEvent): void;
   setLink(link: Link): void;
+  select(id: string | null): void;
+  hover(id: string | null): void;
+  setTimeOfDay(t: TimeOfDay): void;
+  setAllTasks(on: boolean): void;
 }
 
 const FEED_MAX = 200;
@@ -31,12 +41,23 @@ export const useOffice = create<OfficeStore>((set) => ({
   account: { state: 'disconnected' },
   link: 'connecting',
   feed: [],
+  selectedId: null,
+  hoveredId: null,
+  timeOfDay: 'now',
+  allTasks: false,
   setLink: (link) => set({ link }),
+  select: (selectedId) => set({ selectedId }),
+  hover: (hoveredId) => set({ hoveredId }),
+  setTimeOfDay: (timeOfDay) => set({ timeOfDay }),
+  setAllTasks: (allTasks) => set({ allTasks }),
   apply: (event) =>
     set((s) => {
       switch (event.type) {
-        case 'snapshot':
-          return { bots: Object.fromEntries(event.bots.map((b) => [b.id, b])), desks: event.desks };
+        case 'snapshot': {
+          const bots = Object.fromEntries(event.bots.map((b) => [b.id, b]));
+          const selectedId = s.selectedId && bots[s.selectedId] ? s.selectedId : null;
+          return { bots, desks: event.desks, selectedId };
+        }
         case 'bot.updated':
           return { bots: { ...s.bots, [event.bot.id]: event.bot } };
         case 'activity':

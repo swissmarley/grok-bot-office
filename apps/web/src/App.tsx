@@ -1,3 +1,4 @@
+import { Footer } from './panels/Footer';
 import { Header } from './panels/Header';
 import { Team } from './panels/Team';
 import { Office } from './scene/Office';
@@ -30,6 +31,7 @@ export function App() {
           <Team />
         </aside>
       </div>
+      <Footer />
     </div>
   );
 }

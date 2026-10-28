@@ -19,7 +19,7 @@ const state = new OfficeState({
 });
 const auth = new Auth({ token: process.env.GBO_TOKEN, port: config.port, webOrigin: config.webOrigin });
 const app = buildApp(state, auth);
-const source: BotSource = mock ? new MockSource({ thresholds: activeThresholds, count: Number(process.env.GBO_MOCK_BOTS) || undefined }) : new BridgeSource();
+const source: BotSource = mock ? new MockSource({ thresholds: activeThresholds, count: Number(process.env.GBO_MOCK_BOTS) || undefined, showcase: process.env.GBO_MOCK_SHOWCASE === '1' }) : new BridgeSource();
 
 await app.listen({ host: config.host, port: config.port });
 const tick = setInterval(() => state.tick(), config.tickMs);
