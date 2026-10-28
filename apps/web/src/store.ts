@@ -1,0 +1,52 @@
+import { create } from 'zustand';
+import type { Bot, OfficeEvent } from '@grok-office/shared';
+
+export type Link = 'connecting' | 'open' | 'closed' | 'unauthorized';
+
+export interface FeedItem {
+  id: number;
+  botId: string;
+  at: string;
+  text: string;
+}
+
+interface OfficeStore {
+  bots: Record<string, Bot>;
+  desks: number;
+  /** Bot account link, as reported by the server. */
+  account: { state: 'connected' | 'disconnected'; handle?: string };
+  /** Browser ↔ office server socket. */
+  link: Link;
+  feed: FeedItem[];
+  apply(event: OfficeEvent): void;
+  setLink(link: Link): void;
+}
+
+const FEED_MAX = 200;
+let feedSeq = 0;
+
+export const useOffice = create<OfficeStore>((set) => ({
+  bots: {},
+  desks: 8,
+  account: { state: 'disconnected' },
+  link: 'connecting',
+  feed: [],
+  setLink: (link) => set({ link }),
+  apply: (event) =>
+    set((s) => {
+      switch (event.type) {
+        case 'snapshot':
+          return { bots: Object.fromEntries(event.bots.map((b) => [b.id, b])), desks: event.desks };
+        case 'bot.updated':
+          return { bots: { ...s.bots, [event.bot.id]: event.bot } };
+        case 'activity':
+          return { feed: [{ id: ++feedSeq, botId: event.botId, at: event.at, text: event.text }, ...s.feed].slice(0, FEED_MAX) };
+        case 'connection':
+          return { account: event.handle === undefined ? { state: event.state } : { state: event.state, handle: event.handle } };
+        case 'approval.requested':
+        case 'approval.resolved':
+          // The approval itself travels on the bot (bot.updated); cards land in M5.
+          return {};
+      }
+    }),
+}));
