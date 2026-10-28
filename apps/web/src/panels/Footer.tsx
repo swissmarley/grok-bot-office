@@ -18,7 +18,7 @@ export function Footer() {
 
   return (
     <footer className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 border-t border-line bg-panel px-4 py-2 text-xs">
-      <ul className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted">
+      <ul className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted max-md:hidden" aria-label="Legend">
         {LEGEND.map((s) => (
           <li key={s} className="flex items-center gap-1.5">
             <span className="size-2 rounded-full" style={{ background: statusVar(s) }} />
@@ -26,7 +26,7 @@ export function Footer() {
           </li>
         ))}
       </ul>
-      <div className="ml-auto flex items-center gap-3">
+      <div className="ml-auto flex items-center gap-3 max-md:w-full max-md:justify-between">
         <div role="radiogroup" aria-label="Time of day" className="flex rounded-lg border border-line bg-panel-2 p-0.5">
           {TIMES.map((t) => (
             <button

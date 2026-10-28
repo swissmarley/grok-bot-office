@@ -98,3 +98,13 @@ body {
   .gbo-dots span, .gbo-bounce, .gbo-zzz { animation: none; }
   .gbo-dots span { opacity: 0.8; }
 }
+
+/* Progress bar without a declared plan. */
+.gbo-indeterminate > div { animation: gbo-slide 1.4s infinite ease-in-out; }
+@keyframes gbo-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gbo-indeterminate > div { animation: none; width: 100%; opacity: 0.35; }
+}

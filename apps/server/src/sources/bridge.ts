@@ -10,4 +10,14 @@ export class BridgeSource implements BotSource {
   }
 
   async stop(): Promise<void> {}
+
+  async stopBot(): Promise<void> {
+    throw new Error('Not connected to Grok Bot.');
+  }
+
+  async openBot(): Promise<void> {
+    throw new Error('Not connected to Grok Bot.');
+  }
+
+  async reconnect(): Promise<void> {}
 }

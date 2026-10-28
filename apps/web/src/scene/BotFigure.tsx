@@ -15,7 +15,7 @@ import {
   Vector2,
 } from 'three';
 import type { AvatarShape, Bot, BotStatus } from '@grok-office/shared';
-import { STEM_COLOR } from '../avatar/AvatarIcon';
+import { MAIN_BADGE_COLOR, STEM_COLOR } from '../avatar/AvatarIcon';
 import { EYE, avatarGeometry } from '../avatar/shapes';
 import { STATUS_LABEL, statusHex, statusVar } from '../status';
 import { useOffice } from '../store';
@@ -285,6 +285,7 @@ export function BotFigure({ bot, reduced }: { bot: Bot; reduced: boolean }) {
             className={`flex items-center gap-1.5 whitespace-nowrap rounded-full border bg-panel/90 px-2 py-0.5 text-[11px] font-medium shadow ${selected ? 'border-white/70' : 'border-line'}`}
           >
             <span className="size-1.5 rounded-full" style={{ background: statusVar(status) }} />
+            {bot.main && <span className="text-[10px] leading-none" style={{ color: MAIN_BADGE_COLOR }} aria-label="Main bot">★</span>}
             <span>{bot.name}</span>
             <span className="sr-only">{STATUS_LABEL[status]}</span>
           </div>

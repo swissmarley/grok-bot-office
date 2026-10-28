@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Bot, OfficeEvent } from '@grok-office/shared';
+import { EMPTY_VIEW, applyToView, type Bot, type OfficeEvent } from '@grok-office/shared';
 
 export type Link = 'connecting' | 'open' | 'closed' | 'unauthorized';
 export type TimeOfDay = 'now' | 'day' | 'evening' | 'night';
@@ -9,6 +9,13 @@ export interface FeedItem {
   botId: string;
   at: string;
   text: string;
+  kind: 'activity' | 'approval';
+}
+
+export interface Toast {
+  id: number;
+  text: string;
+  tone: 'ok' | 'error';
 }
 
 interface OfficeStore {
@@ -18,7 +25,9 @@ interface OfficeStore {
   account: { state: 'connected' | 'disconnected'; handle?: string };
   /** Browser ↔ office server socket. */
   link: Link;
+  /** Global event feed, newest first. */
   feed: FeedItem[];
+  toasts: Toast[];
   selectedId: string | null;
   hoveredId: string | null;
   timeOfDay: TimeOfDay;
@@ -30,17 +39,22 @@ interface OfficeStore {
   hover(id: string | null): void;
   setTimeOfDay(t: TimeOfDay): void;
   setAllTasks(on: boolean): void;
+  toast(text: string, tone?: Toast['tone']): void;
+  dismissToast(id: number): void;
 }
 
-const FEED_MAX = 200;
-let feedSeq = 0;
+export const FEED_MAX = 200;
+export const TOAST_MS = 4000;
+let seq = 0;
 
-export const useOffice = create<OfficeStore>((set) => ({
-  bots: {},
-  desks: 8,
+const RESULT_TEXT = { allowed: 'Approved', denied: 'Denied', expired: 'Expired' } as const;
+
+export const useOffice = create<OfficeStore>((set, get) => ({
+  ...EMPTY_VIEW,
   account: { state: 'disconnected' },
   link: 'connecting',
   feed: [],
+  toasts: [],
   selectedId: null,
   hoveredId: null,
   timeOfDay: 'now',
@@ -50,24 +64,47 @@ export const useOffice = create<OfficeStore>((set) => ({
   hover: (hoveredId) => set({ hoveredId }),
   setTimeOfDay: (timeOfDay) => set({ timeOfDay }),
   setAllTasks: (allTasks) => set({ allTasks }),
+  toast: (text, tone = 'ok') => {
+    const id = ++seq;
+    set((s) => ({ toasts: [...s.toasts, { id, text, tone }].slice(-3) }));
+    setTimeout(() => get().dismissToast(id), TOAST_MS);
+  },
+  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   apply: (event) =>
     set((s) => {
-      switch (event.type) {
-        case 'snapshot': {
-          const bots = Object.fromEntries(event.bots.map((b) => [b.id, b]));
-          const selectedId = s.selectedId && bots[s.selectedId] ? s.selectedId : null;
-          return { bots, desks: event.desks, selectedId };
-        }
-        case 'bot.updated':
-          return { bots: { ...s.bots, [event.bot.id]: event.bot } };
-        case 'activity':
-          return { feed: [{ id: ++feedSeq, botId: event.botId, at: event.at, text: event.text }, ...s.feed].slice(0, FEED_MAX) };
-        case 'connection':
-          return { account: event.handle === undefined ? { state: event.state } : { state: event.state, handle: event.handle } };
-        case 'approval.requested':
-        case 'approval.resolved':
-          // The approval itself travels on the bot (bot.updated); cards land in M5.
-          return {};
+      const view = applyToView({ bots: s.bots, desks: s.desks }, event);
+      const feed = feedItem(s, event);
+      const next: Partial<OfficeStore> = view.bots === s.bots && view.desks === s.desks ? {} : view;
+      if (feed) next.feed = [feed, ...s.feed].slice(0, FEED_MAX);
+      if (event.type === 'snapshot' && s.selectedId && !view.bots[s.selectedId]) next.selectedId = null;
+      if (event.type === 'connection') {
+        next.account = event.handle === undefined ? { state: event.state } : { state: event.state, handle: event.handle };
       }
+      return next;
     }),
 }));
+
+function feedItem(s: OfficeStore, event: OfficeEvent): FeedItem | undefined {
+  switch (event.type) {
+    case 'activity':
+      return { id: ++seq, botId: event.botId, at: event.at, text: event.text, kind: 'activity' };
+    case 'approval.requested': {
+      const a = event.approval;
+      return { id: ++seq, botId: a.botId, at: a.createdAt, text: `Needs you: ${a.action} · ${a.target}`, kind: 'approval' };
+    }
+    case 'approval.resolved': {
+      // The bot still carries the approval until its own update arrives.
+      const bot = Object.values(s.bots).find((b) => b.approval?.id === event.id);
+      if (!bot?.approval) return undefined;
+      return {
+        id: ++seq,
+        botId: bot.id,
+        at: new Date().toISOString(),
+        text: `${RESULT_TEXT[event.result]}: ${bot.approval.action}`,
+        kind: 'approval',
+      };
+    }
+    default:
+      return undefined;
+  }
+}

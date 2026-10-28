@@ -1,6 +1,7 @@
 import { AvatarIcon } from '../avatar/AvatarIcon';
+import { STATUS_RANK } from '../status';
 import { useOffice } from '../store';
-import { STATUS_LABEL, STATUS_RANK, statusVar } from '../status';
+import { StatusPill } from './Detail';
 
 export function Team() {
   const bots = useOffice((s) => s.bots);
@@ -11,8 +12,8 @@ export function Team() {
   );
 
   return (
-    <section className="flex min-h-0 flex-col">
-      <h2 className="px-4 pt-4 pb-2 text-xs font-semibold tracking-wider text-muted uppercase">Team</h2>
+    <section className="flex shrink-0 flex-col border-b border-line md:max-h-[36%]">
+      <h2 className="px-4 pt-4 pb-2 text-xs font-semibold tracking-wider text-muted uppercase">Team · {sorted.length}</h2>
       <ul className="min-h-0 overflow-y-auto px-2 pb-2">
         {sorted.map((bot) => (
           <li key={bot.id}>
@@ -20,22 +21,17 @@ export function Team() {
               type="button"
               onClick={() => select(selectedId === bot.id ? null : bot.id)}
               aria-pressed={selectedId === bot.id}
-              className={`flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-panel-2 ${selectedId === bot.id ? 'bg-panel-2 ring-1 ring-line' : ''}`}
+              className={`flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-panel-2 ${selectedId === bot.id ? 'bg-panel-2 ring-1 ring-line' : ''}`}
             >
-            <AvatarIcon shape={bot.avatar?.shape} color={bot.color} size={32} closedEyes={bot.status === 'sleeping'} />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-baseline gap-1.5 text-sm">
-                <span className="font-medium">{bot.name}</span>
-                {bot.role && <span className="text-muted">· {bot.role}</span>}
+              <AvatarIcon shape={bot.avatar?.shape} color={bot.color} size={30} main={bot.main} closedEyes={bot.status === 'sleeping'} />
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-baseline gap-1.5 text-sm">
+                  <span className="shrink-0 font-medium">{bot.name}</span>
+                  {bot.role && <span className="truncate text-muted">· {bot.role}</span>}
+                </div>
+                <p className="truncate text-xs text-muted">{bot.activity}</p>
               </div>
-              <p className="truncate text-xs text-muted">{bot.activity}</p>
-            </div>
-            <span
-              className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium"
-              style={{ color: statusVar(bot.status), background: `color-mix(in srgb, ${statusVar(bot.status)} 16%, transparent)` }}
-            >
-              {STATUS_LABEL[bot.status]}
-            </span>
+              <StatusPill bot={bot} />
             </button>
           </li>
         ))}

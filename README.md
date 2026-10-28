@@ -19,7 +19,9 @@ swapped for an httpOnly cookie and removed from the address bar).
 
 - Office server: `127.0.0.1:4317` only (WebSocket `/ws`, REST `/api`).
 - Web UI (Vite): `127.0.0.1:5173`, proxied to the server.
-- State on disk: `~/.grok-office/desks.json` (mock mode: `desks.mock.json`).
+- State on disk in `~/.grok-office/`: `desks.json` (stable desks) and `roles.json`
+  (roles you edited); mock mode uses `desks.mock.json` and `roles.mock.json`.
+- Names like "Bob - Chief of Staff" show as Bob, with role Chief of Staff.
 
 Mock options (environment variables):
 
@@ -31,7 +33,7 @@ primitives in `apps/web/src/avatar/shapes.ts`: the 14 shapes and 11 colors of
 Grok Bot's "Create New Bot" picker.
 
 ```sh
-pnpm test        # server unit tests
+pnpm test        # server and web unit tests
 pnpm typecheck
 ```
 

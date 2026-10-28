@@ -3,16 +3,21 @@ import type { Thresholds } from './config.js';
 import { TASK_TITLE_MAX_CHARS } from './config.js';
 import { botColor } from './colors.js';
 import type { DeskRegistry } from './desks.js';
+import { RoleStore } from './roles.js';
 import { deriveStatus } from './status.js';
 import type { BotSignals, SourceBotUpdate, SourceSink } from './sources/source.js';
 
 interface Entry {
   bot: Bot;
   signals: BotSignals;
+  /** Name and description as the source reports them; name and role derive from these. */
+  rawName: string;
+  description?: string;
 }
 
 export interface OfficeStateOptions {
   desks: DeskRegistry;
+  roles?: RoleStore;
   deskCount: number;
   thresholds: Thresholds;
   now?: () => number;
@@ -33,9 +38,11 @@ export class OfficeState {
   private readonly listeners = new Set<Listener>();
   private conn: Extract<OfficeEvent, { type: 'connection' }> = { type: 'connection', state: 'disconnected' };
   private readonly now: () => number;
+  private readonly roles: RoleStore;
 
   constructor(private readonly opts: OfficeStateOptions) {
     this.now = opts.now ?? Date.now;
+    this.roles = opts.roles ?? new RoleStore();
   }
 
   subscribe(fn: Listener): () => void {
@@ -70,6 +77,20 @@ export class OfficeState {
     }
   }
 
+  has(id: string): boolean {
+    return this.entries.has(id);
+  }
+
+  /** Sets the role you chose for a bot; empty brings back the default. */
+  setRole(id: string, role: string): void {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    this.roles.set(id, role);
+    const before = JSON.stringify(entry.bot);
+    this.applyNaming(entry);
+    this.emitIfChanged(entry, before);
+  }
+
   readonly sink: SourceSink = {
     updateBot: (id, update) => this.updateBot(id, update),
     removeBot: (id) => {
@@ -94,10 +115,11 @@ export class OfficeState {
     if (!entry) {
       const desksBefore = this.deskCount();
       entry = {
+        rawName: update.name ?? id,
         bot: {
           id,
-          name: update.name ?? id,
-          role: roleFrom(update.description),
+          name: id,
+          role: '',
           color: botColor(id, [...this.entries.values()].map((e) => e.bot.color)),
           deskIndex: this.opts.desks.assign(id, this.entries.keys()),
           status: 'idle',
@@ -123,7 +145,13 @@ export class OfficeState {
 
   private apply(entry: Entry, update: SourceBotUpdate): void {
     const { bot } = entry;
-    if (update.name !== undefined) bot.name = update.name;
+    if (update.name !== undefined) entry.rawName = update.name;
+    if (update.description !== undefined) entry.description = update.description;
+    this.applyNaming(entry);
+    if (update.main !== undefined) {
+      if (update.main) bot.main = true;
+      else delete bot.main;
+    }
     if (update.color !== undefined) bot.color = update.color;
     if (update.avatar !== undefined) bot.avatar = update.avatar;
     const fixed = bot.avatar && AVATAR_FIXED_COLORS[bot.avatar.shape];
@@ -133,6 +161,16 @@ export class OfficeState {
     if (update.signals) entry.signals = { ...entry.signals, ...update.signals };
     if (update.task === null) delete bot.task;
     else if (update.task) bot.task = { ...update.task, title: truncate(update.task.title, TASK_TITLE_MAX_CHARS) };
+  }
+
+  /**
+   * "Bob - Chief of Staff" → name Bob, role Chief of Staff. Role: the one you set in
+   * the office, else the part after the dash, else the description's first word.
+   */
+  private applyNaming(entry: Entry): void {
+    const { name, role } = splitName(entry.rawName);
+    entry.bot.name = name;
+    entry.bot.role = this.roles.get(entry.bot.id) ?? role ?? roleFrom(entry.description);
   }
 
   private requestApproval(approval: Approval): void {
@@ -187,6 +225,11 @@ export class OfficeState {
   private iso(): string {
     return new Date(this.now()).toISOString();
   }
+}
+
+export function splitName(raw: string): { name: string; role?: string } {
+  const m = /^\s*(.+?)\s+[-–—]\s+(.+?)\s*$/.exec(raw);
+  return m ? { name: m[1]!, role: m[2]! } : { name: raw.trim() || raw };
 }
 
 /** Default role: first word of the bot's description. */

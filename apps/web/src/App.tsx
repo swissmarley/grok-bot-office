@@ -1,6 +1,7 @@
 import { Footer } from './panels/Footer';
 import { Header } from './panels/Header';
-import { Team } from './panels/Team';
+import { Sidebar } from './panels/Sidebar';
+import { Toaster } from './panels/Toaster';
 import { Office } from './scene/Office';
 import { useOffice } from './store';
 
@@ -21,17 +22,16 @@ export function App() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-dvh flex-col">
       <Header />
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-        <section className="relative min-h-[45vh] flex-1">
+        <section className="relative min-h-0 flex-1">
           <Office />
         </section>
-        <aside className="flex w-full flex-col border-line bg-panel max-md:border-t md:w-[360px] md:border-l">
-          <Team />
-        </aside>
+        <Sidebar />
       </div>
       <Footer />
+      <Toaster />
     </div>
   );
 }

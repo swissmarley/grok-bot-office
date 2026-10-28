@@ -18,6 +18,13 @@ async function establishSession(): Promise<boolean> {
   return (await fetch('/api/session')).ok;
 }
 
+let reconnectNow: () => void = () => {};
+
+/** Skips the backoff wait and tries the office server right away. */
+export function retryNow(): void {
+  reconnectNow();
+}
+
 /** Connects to the office server and keeps reconnecting with backoff. */
 export function connect(): () => void {
   const { apply, setLink } = useOffice.getState();
@@ -61,6 +68,13 @@ export function connect(): () => void {
       setLink('closed');
       schedule();
     };
+  };
+
+  reconnectNow = () => {
+    if (ws && ws.readyState <= WebSocket.OPEN) return;
+    clearTimeout(retry);
+    attempt = 0;
+    void open();
   };
 
   void open();

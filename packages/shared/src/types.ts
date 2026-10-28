@@ -1,6 +1,6 @@
 // Office data model. Bot, Task, Approval and OfficeEvent mirror SPEC.md, plus the
-// optional Bot.avatar; the server normalizes every source into these and the browser
-// sees nothing else.
+// optional Bot.avatar and Bot.main; the server normalizes every source into these and
+// the browser sees nothing else.
 
 export type BotStatus =
   | 'coding' | 'browsing' | 'terminal' | 'thinking'
@@ -13,6 +13,7 @@ export interface Bot {
   unread: number; updatedAt: string;
   task?: Task; approval?: Approval;
   avatar?: BotAvatar;                       // aggiunta: forma dell'avatar di Grok Bot (il colore è `color`)
+  main?: boolean;                           // aggiunta: il bot principale (stellina nell'app)
 }
 
 /** The 14 avatar shapes of Grok Bot's "Create New Bot" picker, in its order. */

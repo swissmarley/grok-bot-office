@@ -1,5 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { readJsonObject, writeJson } from './json-file.js';
 
 /** Stable bot → desk assignment, persisted as { [botId]: deskIndex }. */
 export class DeskRegistry {
@@ -41,23 +40,14 @@ export class DeskRegistry {
   }
 
   private save(): void {
-    mkdirSync(dirname(this.file), { recursive: true });
-    const tmp = `${this.file}.tmp`;
-    writeFileSync(tmp, JSON.stringify(this.desks, null, 2) + '\n');
-    renameSync(tmp, this.file);
+    writeJson(this.file, this.desks);
   }
 }
 
 function load(file: string): Record<string, number> {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const out: Record<string, number> = {};
-    for (const [id, desk] of Object.entries(parsed)) {
-      if (Number.isInteger(desk) && (desk as number) >= 0) out[id] = desk as number;
-    }
-    return out;
-  } catch {
-    return {};
+  const out: Record<string, number> = {};
+  for (const [id, desk] of Object.entries(readJsonObject(file))) {
+    if (Number.isInteger(desk) && (desk as number) >= 0) out[id] = desk as number;
   }
+  return out;
 }

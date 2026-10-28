@@ -24,6 +24,8 @@ export interface SourceBotUpdate {
   /** The bot's avatar color in Grok Bot; without it the office picks one from its palette. */
   color?: string;
   avatar?: BotAvatar;
+  /** The account's main bot. */
+  main?: boolean;
   signals?: Partial<BotSignals>;
   activity?: string;
   unread?: number;
@@ -45,4 +47,10 @@ export interface BotSource {
   readonly kind: 'mock' | 'bridge';
   start(sink: SourceSink): Promise<void>;
   stop(): Promise<void>;
+  /** Interrupts what the bot is doing, like the app's Stop button. */
+  stopBot(id: string): Promise<void>;
+  /** Brings Grok Bot to the front on the bot's conversation. */
+  openBot(id: string): Promise<void>;
+  /** Drops and re-establishes the link to Grok Bot. */
+  reconnect(): Promise<void>;
 }

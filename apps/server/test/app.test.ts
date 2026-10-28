@@ -10,6 +10,7 @@ import { buildApp } from '../src/app.js';
 import { thresholds } from '../src/config.js';
 import { DeskRegistry } from '../src/desks.js';
 import { OfficeState } from '../src/office-state.js';
+import type { BotSource } from '../src/sources/source.js';
 
 const WEB = 'http://127.0.0.1:5173';
 const state = new OfficeState({
@@ -18,7 +19,18 @@ const state = new OfficeState({
   thresholds,
 });
 const auth = new Auth({ port: 4317, webOrigin: WEB });
-const app = buildApp(state, auth);
+const calls: string[] = [];
+const source: BotSource = {
+  kind: 'mock',
+  start: async () => {},
+  stop: async () => {},
+  stopBot: async (id) => void calls.push(`stop ${id}`),
+  openBot: async () => {
+    throw new Error('Grok Bot is not running');
+  },
+  reconnect: async () => void calls.push('reconnect'),
+};
+const app = buildApp(state, auth, source);
 let base = '';
 
 beforeAll(async () => {
@@ -76,5 +88,35 @@ describe('server security', () => {
     expect(await openWs({ ...browser })).toEqual({ status: 401 });
     const res = await openWs({ ...browser, cookie });
     expect('events' in res && res.events.map((e) => e.type)).toEqual(['snapshot', 'connection']);
+  });
+});
+
+describe('bot actions', () => {
+  const cookie = () => auth.sessionCookie().split(';')[0]!;
+
+  it('need the session cookie and a local origin', async () => {
+    expect((await app.inject({ method: 'POST', url: '/api/bots/a/stop', headers: browser })).statusCode).toBe(401);
+    const foreign = await app.inject({ method: 'POST', url: '/api/bots/a/stop', headers: { ...browser, cookie: cookie(), origin: 'https://evil.example' } });
+    expect(foreign.statusCode).toBe(403);
+    expect(calls).toEqual([]);
+  });
+
+  it('run on the source and report its errors', async () => {
+    const headers = { ...browser, cookie: cookie() };
+    expect((await app.inject({ method: 'POST', url: '/api/bots/a/stop', headers })).statusCode).toBe(204);
+    expect((await app.inject({ method: 'POST', url: '/api/bots/nope/stop', headers })).statusCode).toBe(404);
+    const open = await app.inject({ method: 'POST', url: '/api/bots/a/open', headers });
+    expect(open.statusCode).toBe(502);
+    expect(open.json()).toEqual({ error: 'Grok Bot is not running' });
+    expect((await app.inject({ method: 'POST', url: '/api/reconnect', headers })).statusCode).toBe(204);
+    expect(calls).toEqual(['stop a', 'reconnect']);
+  });
+
+  it('edit the role', async () => {
+    const headers = { ...browser, cookie: cookie() };
+    const res = await app.inject({ method: 'POST', url: '/api/bots/a/role', headers, payload: { role: 'Lead' } });
+    expect(res.statusCode).toBe(204);
+    expect(state.snapshot().bots[0]!.role).toBe('Lead');
+    expect((await app.inject({ method: 'POST', url: '/api/bots/a/role', headers, payload: { role: 7 } })).statusCode).toBe(400);
   });
 });

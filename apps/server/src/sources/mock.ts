@@ -182,9 +182,23 @@ export interface MockSourceOptions {
   showcase?: boolean;
 }
 
+/** Rest after you stop a bot, before it picks up its next task. */
+const STOPPED_REST_MS = 20 * S;
+
+interface BotRun {
+  timers: Set<NodeJS.Timeout>;
+  /** Pending approval id, if the bot is waiting on a card. */
+  approvalId?: string;
+  /** Abandons the current task: the next run starts the following one. */
+  skipTask(): void;
+  next(): void;
+}
+
 export class MockSource implements BotSource {
   readonly kind = 'mock';
-  private timers = new Set<NodeJS.Timeout>();
+  private readonly runs = new Map<string, BotRun>();
+  private readonly misc = new Set<NodeJS.Timeout>();
+  private sink?: SourceSink;
   private approvalSeq = 0;
   private readonly rand: () => number;
 
@@ -193,6 +207,7 @@ export class MockSource implements BotSource {
   }
 
   async start(sink: SourceSink): Promise<void> {
+    this.sink = sink;
     sink.connection('connected', '@mock');
     if (this.opts.showcase) return showcase(sink, this.opts.thresholds);
     const scripts = withCopies(this.opts.scripts ?? MOCK_SCRIPTS, this.opts.count);
@@ -201,6 +216,7 @@ export class MockSource implements BotSource {
         name: script.name,
         description: script.description,
         ...MOCK_AVATARS[i % MOCK_AVATARS.length]!,
+        main: i === 0,
         activity: 'Waiting for a task',
       });
       this.runBot(sink, script);
@@ -208,8 +224,43 @@ export class MockSource implements BotSource {
   }
 
   async stop(): Promise<void> {
-    for (const t of this.timers) clearTimeout(t);
-    this.timers.clear();
+    for (const run of this.runs.values()) this.clear(run);
+    for (const t of this.misc) clearTimeout(t);
+    this.misc.clear();
+  }
+
+  async stopBot(id: string): Promise<void> {
+    const run = this.runs.get(id);
+    const sink = this.sink;
+    if (!run || !sink) throw new Error('No such bot.');
+    this.clear(run);
+    if (run.approvalId) {
+      sink.approvalResolved(run.approvalId, 'denied');
+      run.approvalId = undefined;
+    }
+    sink.activity(id, 'Stopped by you');
+    sink.updateBot(id, {
+      activity: 'Stopped',
+      signals: { working: false, needsInput: false, tool: null, error: false, lastReplyAt: new Date().toISOString() },
+    });
+    run.skipTask();
+    this.after(run, STOPPED_REST_MS, run.next);
+  }
+
+  async openBot(id: string): Promise<void> {
+    if (!this.runs.has(id) && !this.opts.showcase) throw new Error('No such bot.');
+    // Nothing to bring forward in mock mode.
+  }
+
+  async reconnect(): Promise<void> {
+    const sink = this.sink;
+    if (!sink) return;
+    sink.connection('disconnected');
+    const t = setTimeout(() => {
+      this.misc.delete(t);
+      sink.connection('connected', '@mock');
+    }, 800);
+    this.misc.add(t);
   }
 
   private runBot(sink: SourceSink, script: Script): void {
@@ -225,34 +276,44 @@ export class MockSource implements BotSource {
       sink.updateBot(script.id, { task, unread: task.log.length, signals: { lastReplyAt: at } });
     };
 
-    const next = (): void => {
-      const current = script.tasks[taskIndex]!;
-      if (phaseIndex === 0) {
-        step = 0;
-        task = { title: current.title, log: [] };
-        sink.activity(script.id, `New task: ${current.title}`);
-        sink.updateBot(script.id, { task, unread: 0, signals: { computerAsleep: false } });
-      }
-      const phase = current.phases[phaseIndex]!;
-      if (phase.kind === 'work' && phase.step && current.steps) {
-        step = Math.min(step + 1, current.steps);
-        task = { ...task, step: { index: step, total: current.steps } };
-        sink.updateBot(script.id, { task });
-      }
-      phaseIndex++;
-      if (phaseIndex >= current.phases.length) {
-        phaseIndex = 0;
-        taskIndex = (taskIndex + 1) % script.tasks.length;
-      }
-      this.after(this.runPhase(sink, script.id, phase, task.title, reply), next);
+    const run: BotRun = {
+      timers: new Set(),
+      skipTask: () => {
+        if (phaseIndex !== 0) {
+          phaseIndex = 0;
+          taskIndex = (taskIndex + 1) % script.tasks.length;
+        }
+      },
+      next: () => {
+        const current = script.tasks[taskIndex]!;
+        if (phaseIndex === 0) {
+          step = 0;
+          task = { title: current.title, log: [] };
+          sink.activity(script.id, `New task: ${current.title}`);
+          sink.updateBot(script.id, { task, unread: 0, signals: { computerAsleep: false } });
+        }
+        const phase = current.phases[phaseIndex]!;
+        if (phase.kind === 'work' && phase.step && current.steps) {
+          step = Math.min(step + 1, current.steps);
+          task = { ...task, step: { index: step, total: current.steps } };
+          sink.updateBot(script.id, { task });
+        }
+        phaseIndex++;
+        if (phaseIndex >= current.phases.length) {
+          phaseIndex = 0;
+          taskIndex = (taskIndex + 1) % script.tasks.length;
+        }
+        this.after(run, this.runPhase(sink, run, script.id, phase, task.title, reply), run.next);
+      },
     };
-
-    next();
+    this.runs.set(script.id, run);
+    run.next();
   }
 
-  /** Starts a phase and returns how long it lasts; `done` runs as it ends. */
+  /** Starts a phase and returns how long it lasts. */
   private runPhase(
     sink: SourceSink,
+    run: BotRun,
     id: string,
     phase: Phase,
     taskTitle: string,
@@ -262,7 +323,7 @@ export class MockSource implements BotSource {
       case 'work': {
         sink.updateBot(id, { activity: phase.activity, signals: { working: true, tool: phase.tool, error: false } });
         const ms = this.jitter(phase.ms);
-        if (phase.reply) this.after(ms - 50, () => reply(phase.reply!));
+        if (phase.reply) this.after(run, ms - 50, () => reply(phase.reply!));
         return ms;
       }
       case 'error': {
@@ -285,7 +346,9 @@ export class MockSource implements BotSource {
         if (phase.origin !== 'chat') approval.expiresAt = new Date(createdAt.getTime() + ms).toISOString();
         sink.updateBot(id, { activity: `Waiting for you: ${phase.action}`, signals: { working: false, needsInput: true } });
         sink.approvalRequested(approval);
-        this.after(ms - 50, () => {
+        run.approvalId = approval.id;
+        this.after(run, ms - 50, () => {
+          run.approvalId = undefined;
           if (phase.origin === 'chat') {
             // Mock stand-in for you answering the card in the Grok Bot app (approvals V1).
             sink.approvalResolved(approval.id, 'allowed');
@@ -314,12 +377,17 @@ export class MockSource implements BotSource {
     }
   }
 
-  private after(ms: number, fn: () => void): void {
+  private after(run: BotRun, ms: number, fn: () => void): void {
     const t = setTimeout(() => {
-      this.timers.delete(t);
+      run.timers.delete(t);
       fn();
     }, Math.max(0, ms));
-    this.timers.add(t);
+    run.timers.add(t);
+  }
+
+  private clear(run: BotRun): void {
+    for (const t of run.timers) clearTimeout(t);
+    run.timers.clear();
   }
 
   private jitter(ms: number): number {
