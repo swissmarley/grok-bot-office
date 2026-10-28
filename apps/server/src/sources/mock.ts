@@ -158,6 +158,8 @@ export interface MockSourceOptions {
   /** Seed for duration jitter, so runs are reproducible. */
   seed?: number;
   scripts?: Script[];
+  /** How many bots to run; beyond the five scripts, copies like "Scout 2". */
+  count?: number;
 }
 
 export class MockSource implements BotSource {
@@ -172,7 +174,7 @@ export class MockSource implements BotSource {
 
   async start(sink: SourceSink): Promise<void> {
     sink.connection('connected', '@mock');
-    for (const script of this.opts.scripts ?? MOCK_SCRIPTS) {
+    for (const script of withCopies(this.opts.scripts ?? MOCK_SCRIPTS, this.opts.count)) {
       sink.updateBot(script.id, { name: script.name, description: script.description, activity: 'Waiting for a task' });
       this.runBot(sink, script);
     }
@@ -296,6 +298,14 @@ export class MockSource implements BotSource {
   private jitter(ms: number): number {
     return Math.round(ms * (0.85 + this.rand() * 0.3));
   }
+}
+
+function withCopies(scripts: Script[], count = scripts.length): Script[] {
+  return Array.from({ length: count }, (_, i) => {
+    const base = scripts[i % scripts.length]!;
+    const copy = Math.floor(i / scripts.length) + 1;
+    return copy === 1 ? base : { ...base, id: `${base.id}-${copy}`, name: `${base.name} ${copy}` };
+  });
 }
 
 function mulberry32(seed: number): () => number {

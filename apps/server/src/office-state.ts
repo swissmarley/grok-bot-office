@@ -1,4 +1,4 @@
-import type { Approval, Bot, OfficeEvent } from '@grok-office/shared';
+import { DESKS_PER_ROW, type Approval, type Bot, type OfficeEvent } from '@grok-office/shared';
 import type { Thresholds } from './config.js';
 import { TASK_TITLE_MAX_CHARS } from './config.js';
 import { botColor } from './colors.js';
@@ -45,8 +45,13 @@ export class OfficeState {
 
   snapshot(): Extract<OfficeEvent, { type: 'snapshot' }> {
     const bots = [...this.entries.values()].map((e) => e.bot);
-    const highest = Math.max(-1, ...bots.map((b) => b.deskIndex));
-    return { type: 'snapshot', bots: structuredClone(bots), desks: Math.max(this.opts.deskCount, highest + 1) };
+    return { type: 'snapshot', bots: structuredClone(bots), desks: this.deskCount() };
+  }
+
+  /** At least the configured desks; beyond that, whole rows as bots need them. */
+  private deskCount(): number {
+    const highest = Math.max(-1, ...[...this.entries.values()].map((e) => e.bot.deskIndex));
+    return Math.max(this.opts.deskCount, Math.ceil((highest + 1) / DESKS_PER_ROW) * DESKS_PER_ROW);
   }
 
   connection(): Extract<OfficeEvent, { type: 'connection' }> {
@@ -87,6 +92,7 @@ export class OfficeState {
   private updateBot(id: string, update: SourceBotUpdate): void {
     let entry = this.entries.get(id);
     if (!entry) {
+      const desksBefore = this.deskCount();
       entry = {
         bot: {
           id,
@@ -102,10 +108,11 @@ export class OfficeState {
         signals: { ...DEFAULT_SIGNALS },
       };
       this.entries.set(id, entry);
-      // Brand-new bots always go out, even if nothing else changes below.
+      // Brand-new bots always go out; if they opened a new row of desks, as a fresh snapshot.
       this.apply(entry, update);
       entry.bot.status = this.statusOf(entry);
-      this.emit({ type: 'bot.updated', bot: structuredClone(entry.bot) });
+      if (this.deskCount() !== desksBefore) this.emit(this.snapshot());
+      else this.emit({ type: 'bot.updated', bot: structuredClone(entry.bot) });
       return;
     }
     const before = JSON.stringify(entry.bot);

@@ -71,4 +71,16 @@ describe('OfficeState', () => {
     const desks = Object.fromEntries(second.state.snapshot().bots.map((b) => [b.id, b.deskIndex]));
     expect(desks).toEqual({ a: 1, c: 2, b: 0 });
   });
+
+  it('adds a row of desks when every desk is taken', () => {
+    const now = { t: 0 };
+    const { state, events } = setup(now);
+    for (let i = 0; i < 8; i++) state.sink.updateBot(`b${i}`, {});
+    expect(state.snapshot().desks).toBe(8);
+    expect(events.some((e) => e.type === 'snapshot')).toBe(false);
+    state.sink.updateBot('b8', {});
+    expect(events.at(-1)).toMatchObject({ type: 'snapshot', desks: 12 });
+    for (let i = 9; i < 13; i++) state.sink.updateBot(`b${i}`, {});
+    expect(state.snapshot().desks).toBe(16);
+  });
 });

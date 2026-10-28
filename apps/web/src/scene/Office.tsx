@@ -6,31 +6,38 @@ import { useOffice } from '../store';
 import { Desks } from './Desks';
 import { Ghost } from './Ghost';
 import { Room } from './Room';
+import { WALL_HEIGHT, roomSize, type RoomSize } from './layout';
 
 // Isometric: camera on the (1, 1, 1) diagonal → rotation Y 45°, X ≈ -35.26°.
-const TARGET: [number, number, number] = [0, 1.5, 0];
-const DISTANCE = 30;
+const DISTANCE = 40;
+const MARGIN = 1;
 
-function IsoCamera() {
+function IsoCamera({ room }: { room: RoomSize }) {
   const ref = useRef<ThreeOrthographicCamera>(null);
   const size = useThree((s) => s.size);
+
+  // Screen extents of the room: floor diagonal across, floor + walls up.
+  const span = room.width + room.depth;
+  const screenW = span / Math.SQRT2 + MARGIN;
+  const screenH = (span + 2 * WALL_HEIGHT) / Math.sqrt(6) + MARGIN;
+  // Lift the target so walls and floor sit centered vertically.
+  const target: [number, number, number] = [0, WALL_HEIGHT / 2, room.backZ + room.depth / 2];
 
   useLayoutEffect(() => {
     const cam = ref.current;
     if (!cam) return;
-    // The room projects to about 16.5 × 12.5 units on screen.
-    cam.zoom = Math.min(size.width / 16.5, size.height / 12.5);
-    cam.lookAt(...TARGET);
+    cam.zoom = Math.min(size.width / screenW, size.height / screenH);
+    cam.lookAt(...target);
     cam.updateProjectionMatrix();
-  }, [size]);
+  });
 
   return (
     <OrthographicCamera
       ref={ref}
       makeDefault
-      position={[TARGET[0] + DISTANCE, TARGET[1] + DISTANCE, TARGET[2] + DISTANCE]}
+      position={[target[0] + DISTANCE, target[1] + DISTANCE, target[2] + DISTANCE]}
       near={0.1}
-      far={200}
+      far={300}
     />
   );
 }
@@ -38,11 +45,12 @@ function IsoCamera() {
 export function Office() {
   const bots = Object.values(useOffice((s) => s.bots));
   const desks = useOffice((s) => s.desks);
+  const room = roomSize(desks);
 
   return (
     <Canvas shadows dpr={[1, 2]} frameloop="demand" className="!absolute inset-0">
       <color attach="background" args={['#0B0F17']} />
-      <IsoCamera />
+      <IsoCamera room={room} />
       <ambientLight intensity={0.8} />
       <hemisphereLight args={['#B8C6FF', '#2A3142', 0.6]} />
       <directionalLight
@@ -55,7 +63,7 @@ export function Office() {
         shadow-camera-top={9}
         shadow-camera-bottom={-9}
       />
-      <Room />
+      <Room size={room} />
       <Desks count={desks} bots={bots} />
       {bots.map((bot) => (
         <Ghost key={bot.id} bot={bot} />

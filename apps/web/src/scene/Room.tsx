@@ -1,4 +1,4 @@
-import { ROOM } from './layout';
+import { WALL_HEIGHT, type RoomSize } from './layout';
 
 const FLOOR = '#252E40';
 const WALL = '#2E3850';
@@ -23,28 +23,30 @@ function Window({ position, rotationY = 0 }: { position: [number, number, number
   );
 }
 
-export function Room() {
-  const { width, depth, wallHeight } = ROOM;
+export function Room({ size }: { size: RoomSize }) {
+  const { width, depth, backZ } = size;
+  const wallHeight = WALL_HEIGHT;
+  const midZ = backZ + depth / 2;
   return (
     <group>
-      <mesh position={[0, -0.05, 0]} receiveShadow>
+      <mesh position={[0, -0.05, midZ]} receiveShadow>
         <boxGeometry args={[width, 0.1, depth]} />
         <meshStandardMaterial color={FLOOR} />
       </mesh>
       {/* Back wall */}
-      <mesh position={[0, wallHeight / 2, -depth / 2 - 0.1]} receiveShadow>
+      <mesh position={[0, wallHeight / 2, backZ - 0.1]} receiveShadow>
         <boxGeometry args={[width + 0.2, wallHeight, 0.2]} />
         <meshStandardMaterial color={WALL} />
       </mesh>
       {/* Left wall */}
-      <mesh position={[-width / 2 - 0.1, wallHeight / 2, 0]} receiveShadow>
+      <mesh position={[-width / 2 - 0.1, wallHeight / 2, midZ]} receiveShadow>
         <boxGeometry args={[0.2, wallHeight, depth]} />
         <meshStandardMaterial color={WALL} />
       </mesh>
-      <Window position={[-1.5, 1.8, -depth / 2]} />
-      <Window position={[2.5, 1.8, -depth / 2]} />
-      <Window position={[-width / 2, 1.8, -1]} rotationY={Math.PI / 2} />
-      <Window position={[-width / 2, 1.8, 2.5]} rotationY={Math.PI / 2} />
+      <Window position={[-1.5, 1.8, backZ]} />
+      <Window position={[2.5, 1.8, backZ]} />
+      <Window position={[-width / 2, 1.8, backZ + 4]} rotationY={Math.PI / 2} />
+      <Window position={[-width / 2, 1.8, backZ + 7.5]} rotationY={Math.PI / 2} />
     </group>
   );
 }

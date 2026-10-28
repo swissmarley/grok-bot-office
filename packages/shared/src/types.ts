@@ -40,3 +40,6 @@ export const BOT_STATUSES: readonly BotStatus[] = [
 ];
 
 export const WORKING_STATUSES: readonly BotStatus[] = ['coding', 'browsing', 'terminal', 'thinking'];
+
+/** Desks come in rows of this many; a new row appears when every desk is taken. */
+export const DESKS_PER_ROW = 4;

@@ -8,10 +8,10 @@ export function Header() {
   const link = useOffice((s) => s.link);
 
   const counters = [
-    { label: 'working', value: bots.filter((b) => isWorking(b.status)).length, color: 'var(--st-coding)' },
-    { label: 'need you', value: bots.filter((b) => b.status === 'needs_you' || b.status === 'error').length, color: 'var(--st-needs)' },
-    { label: 'idle', value: bots.filter((b) => b.status === 'done' || b.status === 'idle' || b.status === 'sleeping').length, color: 'var(--st-idle)' },
-    { label: 'free desk', value: Math.max(0, desks - bots.length), color: 'var(--muted)' },
+    { label: 'working', hint: 'Coding, browsing, in terminal or thinking', value: bots.filter((b) => isWorking(b.status)).length, color: 'var(--st-coding)' },
+    { label: 'need you', hint: 'Waiting for your approval or answer, or stopped on an error', value: bots.filter((b) => b.status === 'needs_you' || b.status === 'error').length, color: 'var(--st-needs)' },
+    { label: 'idle', hint: 'Done, idle or sleeping', value: bots.filter((b) => b.status === 'done' || b.status === 'idle' || b.status === 'sleeping').length, color: 'var(--st-idle)' },
+    { label: 'free desk', hint: 'Empty desks; a new row appears when all are taken', value: Math.max(0, desks - bots.length), color: 'var(--muted)' },
   ];
 
   const connected = link === 'open' && account.state === 'connected';
@@ -25,7 +25,7 @@ export function Header() {
       </div>
       <ul className="flex min-w-0 flex-1 items-center justify-center gap-2.5 text-sm sm:gap-5">
         {counters.map((c) => (
-          <li key={c.label} className="flex items-baseline gap-1 whitespace-nowrap sm:gap-1.5" title={c.label}>
+          <li key={c.label} className="flex items-baseline gap-1 whitespace-nowrap sm:gap-1.5" title={c.hint}>
             <span className="font-semibold tabular-nums" style={{ color: c.color }}>{c.value}</span>
             <span className="text-muted max-sm:text-[11px]">{c.label}</span>
           </li>
