@@ -37,6 +37,30 @@ pnpm test        # server and web unit tests
 pnpm typecheck
 ```
 
+## With your real bots (grokbot-bridge)
+
+Requirements: the Grok Bot desktop app signed in with at least one Bot, and
+[grokbot-bridge](https://github.com/TheSethRose/grokbot-bridge) installed so that
+`grokbot` is on your PATH (macOS; `GROKBOT_BIN` points elsewhere).
+
+```sh
+npm install -g https://github.com/TheSethRose/grokbot-bridge/archive/refs/heads/main.tar.gz
+grokbot launch     # restarts Grok Bot with the debug port on 127.0.0.1:9333
+pnpm dev           # no --mock: the office reads your bots through the bridge
+grokbot restore    # when you're done: restarts Grok Bot normally, closing the port
+```
+
+The office runs `grokbot status`, `bots --json`, `watch --json`, `read <bot> --json
+--limit 20` and `stop <bot>`. It **never starts, quits or restarts Grok Bot**: the
+bridge relaunches the app when it can't reach the port, so the office runs it with
+`GROKBOT_APP` pointing nowhere and that relaunch fails instead. If you close Grok
+Bot, the badge turns Disconnected and the office keeps retrying; it reconnects by
+itself once you run `grokbot launch` again.
+
+**Risk of the debug port:** while Grok Bot runs with it, any program on your Mac
+that connects to `127.0.0.1:9333` can act in the app as you. It isn't exposed to the
+network, but close it with `grokbot restore` when you're not using the office.
+
 ## Probing the Grok Bot app
 
 `scripts/probe-avatars.mjs` is a read-only look at where the desktop app keeps each

@@ -38,6 +38,19 @@ export const config = {
   /** How often time-based states (done → idle → sleeping, expiries) are re-evaluated. */
   tickMs: 1000,
   dataDir: process.env.GBO_HOME ?? join(homedir(), '.grok-office'),
+  bridge: {
+    /** grokbot-bridge CLI. */
+    command: process.env.GROKBOT_BIN ?? 'grokbot',
+    cdpPort: Number(process.env.GROKBOT_CDP_PORT ?? 9333),
+    /** Reconnect backoff after Grok Bot goes away. */
+    retryMinMs: 1000,
+    retryMaxMs: 15_000,
+    /** How often the bot list is re-read (names, unread, new or deleted bots). */
+    pollMs: 30_000,
+    /** Wait this long after a state change before reading the conversation, to batch bursts. */
+    readDebounceMs: 300,
+    commandTimeoutMs: 20_000,
+  },
 };
 
 export const TASK_TITLE_MAX_CHARS = 60;

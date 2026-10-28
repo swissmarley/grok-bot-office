@@ -7,6 +7,8 @@ import { useOffice } from './store';
 
 export function App() {
   const link = useOffice((s) => s.link);
+  const offline = useOffice((s) => s.link !== 'open' || s.account.state !== 'connected');
+  const hasBots = useOffice((s) => Object.keys(s.bots).length > 0);
 
   if (link === 'unauthorized') {
     return (
@@ -27,6 +29,11 @@ export function App() {
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <section className="relative min-h-0 flex-1">
           <Office />
+          {offline && hasBots && (
+            <p role="status" className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded-full bg-panel/90 px-3 py-1 text-xs text-muted ring-1 ring-line">
+              {link === 'open' ? 'Grok Bot is disconnected' : 'Office server offline'}: showing the last known state
+            </p>
+          )}
         </section>
         <Sidebar />
       </div>

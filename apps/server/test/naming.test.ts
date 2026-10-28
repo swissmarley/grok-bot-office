@@ -20,9 +20,9 @@ function setup(dir = mkdtempSync(join(tmpdir(), 'gbo-'))) {
 
 describe('bot naming', () => {
   it.each([
-    ['Bob - Chief of Staff', 'Bob', 'Chief of Staff'],
-    ['Cloe – The Rent Scout', 'Cloe', 'The Rent Scout'],
-    ['Mel — The Reviewer', 'Mel', 'The Reviewer'],
+    ['Ada - Chief of Staff', 'Ada', 'Chief of Staff'],
+    ['Rui – The Rent Scout', 'Rui', 'The Rent Scout'],
+    ['Lin — The Reviewer', 'Lin', 'The Reviewer'],
     ['Scout', 'Scout', undefined],
     ['Re-Do', 'Re-Do', undefined],
   ])('splits %s', (raw, name, role) => {

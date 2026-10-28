@@ -24,6 +24,7 @@ export function Detail() {
   return (
     <section aria-label={`${bot.name} details`} className="flex flex-col gap-3 border-b border-line px-4 py-4">
       {bot.approval && <ApprovalCard bot={bot} approval={bot.approval} now={now} />}
+      {!bot.approval && bot.status === 'needs_you' && <NeedsYouCard bot={bot} />}
 
       <div className="flex items-start gap-3">
         <AvatarIcon shape={bot.avatar?.shape} color={bot.color} size={40} main={bot.main} closedEyes={bot.status === 'sleeping'} />
@@ -204,6 +205,19 @@ function formatInput(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+/** Waiting on you, but the details of the card aren't readable: say what we know. */
+function NeedsYouCard({ bot }: { bot: Bot }) {
+  return (
+    <div className="rounded-xl bg-st-needs/10 p-3 ring-1 ring-st-needs/50" role="region" aria-label="Needs you">
+      <p className="text-xs font-semibold text-st-needs">{bot.name} is waiting for you in Grok Bot</p>
+      {bot.activity && bot.activity !== 'Waiting for you in Grok Bot' && (
+        <p className="mt-1 text-xs break-words"><BotText text={bot.activity} /></p>
+      )}
+      <p className="mt-2 text-[11px] text-muted">An approval or a question. Answer it in the app: Open in Grok Bot.</p>
+    </div>
+  );
 }
 
 /** V1: shows what the card asks; you answer it in Grok Bot. */
