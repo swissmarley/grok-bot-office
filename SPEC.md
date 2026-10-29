@@ -246,8 +246,8 @@ Si parte dalla modalità mock, così scena e pannelli si costruiscono senza tocc
    - [ ] Contatori e scena restano coerenti con lo stato del server
    - [ ] Layout mobile utilizzabile a 390 px di larghezza
 4. **M3 · Bridge live**: adapter su `bots`, `watch`, `read`, con riconnessione.
-   - [ ] Un messaggio mandato a un bot dall'app compare nel log entro 2 s
-   - [ ] Chiudendo l'app il badge passa a Disconnected e si riprende da solo
+   - [x] Un messaggio mandato a un bot dall'app compare nel log entro 2 s
+   - [x] Chiudendo l'app il badge passa a Disconnected e si riprende da solo
 5. **M4 · Attività fini**: fork per gli step dei tool, mapping coding / browsing / terminal.
    - [ ] Un bot che apre il browser passa a browsing
    - [ ] Se il fork fallisce, gli stati collassano in thinking senza errori in UI
