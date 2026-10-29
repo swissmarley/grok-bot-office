@@ -1,7 +1,7 @@
 From dee9829c63c8a947fec11fa08cc7abe4d6a668aa Mon Sep 17 00:00:00 2001
 From: Nakya <nakya@Mac-mini-di-Nakya.local>
 Date: Thu, 29 Oct 2026 21:31:09 +0100
-Subject: [PATCH 2/3] feat: office-watch streams the tool each Bot is using, or
+Subject: [PATCH 2/4] feat: office-watch streams the tool each Bot is using, or
  its own status line
 
 Reads currentActivity on Bot-list rows (Grok Bot 0.78.1): tool names map to

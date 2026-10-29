@@ -44,6 +44,11 @@ switch (cmd) {
     if (!existsSync(join(dir, 'fork'))) fail(`Unknown command "open".`);
     console.log(JSON.stringify({ bot: args[0], selected: true, focused: true }));
     break;
+  case 'resolve': {
+    const file = join(dir, 'resolve.json');
+    console.log(existsSync(file) ? readFileSync(file, 'utf8') : JSON.stringify({ result: args[2] === 'allow_once' ? 'allowed' : 'denied' }));
+    break;
+  }
   case 'stop':
     console.log(JSON.stringify({ bot: args[0], stopped: true }));
     break;

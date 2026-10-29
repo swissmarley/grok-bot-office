@@ -6,7 +6,8 @@
 
 - `grokbot bots --json` also carries each Bot's `avatar`, `main` and `computerPhase`
 - `grokbot open <bot>` shows that Bot's conversation and brings Grok Bot to the front
-- `grokbot office-watch` streams the tool each Bot is using, or its own status line
+- `grokbot office-watch` streams the tool each Bot is using, or its own status line, open questions and cards
+- `grokbot cards <bot>` and `grokbot resolve <bot> <entry> allow_once|deny|discard` for approvals
 - `grokbot internals` reports which pieces the running app still exposes
 
 To make the fork (on the Mac, with `gh` signed in):

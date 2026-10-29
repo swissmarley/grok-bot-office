@@ -41,14 +41,22 @@ export interface Approval {
   action: string; target: string; inputs: Record<string, unknown>;
   origin: 'chat' | 'routine' | 'trigger' | 'bot';
   createdAt: string; expiresAt?: string;    // +10 min se origin != 'chat'
+  kind?: ApprovalKind;                      // aggiunta (V2): approvazione, bozza email o "serve te nell'app"
+  decisions?: ApprovalDecision[];           // aggiunta (V2): cosa si può rispondere dall'ufficio; vuoto = solo nell'app
 }
+
+/** approval: Auto Review card (Allow once / Deny); draft: email draft (Discard; sending stays in the app); takeover: answer in the app. */
+export type ApprovalKind = 'approval' | 'draft' | 'takeover';
+/** Never "always allow": that and Auto Review rules stay in the app. */
+export type ApprovalDecision = 'allow_once' | 'deny' | 'discard';
+export type ApprovalResult = 'allowed' | 'denied' | 'expired';
 
 export type OfficeEvent =
   | { type: 'snapshot'; bots: Bot[]; desks: number }
   | { type: 'bot.updated'; bot: Bot }
   | { type: 'activity'; botId: string; at: string; text: string }
   | { type: 'approval.requested'; approval: Approval }
-  | { type: 'approval.resolved'; id: string; result: 'allowed' | 'denied' | 'expired' }
+  | { type: 'approval.resolved'; id: string; result: ApprovalResult }
   | { type: 'connection'; state: 'connected' | 'disconnected'; handle?: string };
 
 export const BOT_STATUSES: readonly BotStatus[] = [

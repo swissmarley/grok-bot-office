@@ -253,8 +253,8 @@ Si parte dalla modalità mock, così scena e pannelli si costruiscono senza tocc
    - [x] Se il fork fallisce, gli stati collassano in thinking senza errori in UI
 6. **M5 · Approvazioni**: V1, poi V2.
    - [x] V1: needs_you compare entro 2 s e Apri in Grok Bot porta sulla conversazione giusta
-   - [ ] V2: Allow once e Deny funzionano, l'esito è nel toast e in `audit.log`
-   - [ ] Card scadute diventano Expired senza pulsanti
+   - [x] V2: Allow once e Deny funzionano, l'esito è nel toast e in `audit.log` (dal vivo: Discard di una bozza email; Allow once / Deny su mock e finta app, nessuna card di Auto Review vista finora)
+   - [x] Card scadute diventano Expired senza pulsanti
 7. **M6 · Rifinitura**: audio, notifiche, avvio con un comando (`npx grok-office`) che lancia server e browser.
    - [x] 60 fps su M1 con 12 bot
    - [x] README con setup, rischi della porta debug e `grokbot restore`

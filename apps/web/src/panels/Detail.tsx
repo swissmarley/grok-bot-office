@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Approval, Bot } from '@grok-office/shared';
+import type { Approval, ApprovalDecision, ApprovalResult, Bot } from '@grok-office/shared';
 import { api } from '../api';
 import { AvatarIcon } from '../avatar/AvatarIcon';
 import { useNow } from '../hooks';
@@ -220,15 +220,53 @@ function NeedsYouCard({ bot }: { bot: Bot }) {
   );
 }
 
-/** V1: shows what the card asks; you answer it in Grok Bot. */
+const DECISION_LABEL: Record<ApprovalDecision, string> = { allow_once: 'Allow once', deny: 'Deny', discard: 'Discard' };
+
+/** What the toast says once a card is answered from the office. */
+export function outcomeText(bot: Bot, approval: Approval, decision: ApprovalDecision, result: ApprovalResult): string {
+  if (result === 'expired') return 'That card had already expired.';
+  if (decision === 'discard') return `Draft discarded. ${bot.name} won't send it.`;
+  return result === 'allowed' ? `Allowed once. ${bot.name} goes ahead: ${approval.action}.` : `Denied. ${bot.name} won't ${lowerFirst(approval.action)}.`;
+}
+
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
+/**
+ * Buttons only when the card says what it does (action and target) and offers them; never
+ * "always allow", never more than this one card per click.
+ */
+export function answerableDecisions(approval: Approval, expired: boolean): ApprovalDecision[] {
+  if (expired || !approval.action.trim() || !approval.target.trim()) return [];
+  return approval.decisions ?? [];
+}
+
+/** Shows what the card asks, then the answers the office may give; the rest is answered in Grok Bot. */
 function ApprovalCard({ bot, approval, now }: { bot: Bot; approval: Approval; now: number }) {
   const left = approval.expiresAt ? countdown(approval.expiresAt, now) : undefined;
   const expired = left === null;
   const inputs = Object.entries(approval.inputs);
+  const decisions = answerableDecisions(approval, expired);
+  const [busy, setBusy] = useState<ApprovalDecision | null>(null);
+  const toast = useOffice((s) => s.toast);
+  const decide = async (decision: ApprovalDecision) => {
+    setBusy(decision);
+    const result = await api.answer(approval.id, decision);
+    setBusy(null);
+    if (result) toast(outcomeText(bot, approval, decision, result), result === 'expired' ? 'error' : 'ok');
+  };
+  const heading = expired
+    ? 'Expired'
+    : approval.kind === 'draft'
+      ? `${bot.name} drafted an email`
+      : approval.kind === 'takeover'
+        ? `${bot.name} needs you in Grok Bot`
+        : `${bot.name} needs you`;
   return (
     <div className={`rounded-xl p-3 ring-1 ${expired ? 'bg-panel-2 ring-line' : 'bg-st-needs/10 ring-st-needs/50'}`} role="region" aria-label="Approval">
       <div className="mb-2 flex items-center justify-between gap-2 text-xs">
-        <span className={`font-semibold ${expired ? 'text-muted' : 'text-st-needs'}`}>{expired ? 'Expired' : `${bot.name} needs you`}</span>
+        <span className={`font-semibold ${expired ? 'text-muted' : 'text-st-needs'}`}>{heading}</span>
         {left && <span className="font-mono text-st-needs tabular-nums" aria-label="Time left">{left}</span>}
       </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
@@ -245,7 +283,32 @@ function ApprovalCard({ bot, approval, now }: { bot: Bot; approval: Approval; no
           </div>
         ))}
       </dl>
-      {!expired && <p className="mt-2 text-[11px] text-muted">Answer this card in Grok Bot: Open in Grok Bot takes you there.</p>}
+      {decisions.length > 0 && (
+        <div className="mt-3 flex gap-2">
+          {decisions.map((d) => (
+            <button
+              key={d}
+              type="button"
+              disabled={busy !== null}
+              onClick={() => void decide(d)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium disabled:opacity-50 ${
+                d === 'allow_once' ? 'bg-st-done/20 text-st-done ring-1 ring-st-done/50 hover:bg-st-done/30' : 'bg-panel-2 text-text ring-1 ring-line hover:bg-panel'
+              }`}
+            >
+              {busy === d ? '…' : DECISION_LABEL[d]}
+            </button>
+          ))}
+        </div>
+      )}
+      {!expired && (
+        <p className="mt-2 text-[11px] text-muted">
+          {approval.kind === 'draft'
+            ? 'To send it, review it in Grok Bot: Open in Grok Bot takes you there.'
+            : decisions.length > 0
+              ? 'Always allow and Auto Review rules stay in Grok Bot.'
+              : 'Answer this card in Grok Bot: Open in Grok Bot takes you there.'}
+        </p>
+      )}
     </div>
   );
 }

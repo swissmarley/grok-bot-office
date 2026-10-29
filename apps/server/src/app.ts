@@ -4,12 +4,18 @@ import type { OfficeState } from './office-state.js';
 import { ROLE_MAX_CHARS } from './roles.js';
 import type { BotSource } from './sources/source.js';
 import { serveStatic } from './static.js';
+import type { AuditLog } from './audit.js';
 import { attachWebSocket } from './ws.js';
 
 type BotParams = { Params: { id: string } };
 
 /** HTTP + WS server. No CORS: cross-origin requests get no Access-Control headers and fail. */
-export function buildApp(state: OfficeState, auth: Auth, source?: BotSource, opts: { staticDir?: string } = {}): FastifyInstance {
+export function buildApp(
+  state: OfficeState,
+  auth: Auth,
+  source?: BotSource,
+  opts: { staticDir?: string; audit?: AuditLog } = {},
+): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 16 * 1024 });
 
   // The UI can approve real actions: no framing (clickjacking), no sniffing, no referrers,
@@ -64,6 +70,28 @@ export function buildApp(state: OfficeState, auth: Auth, source?: BotSource, opt
   if (source) {
     app.post<BotParams>('/api/bots/:id/stop', botAction((id) => source.stopBot(id)));
     app.post<BotParams>('/api/bots/:id/open', botAction((id) => source.openBot(id)));
+    // One card, one click: Allow once, Deny or Discard, only as the card itself offers.
+    app.post<{ Params: { id: string }; Body: { decision?: unknown } }>('/api/approvals/:id', async (req, reply) => {
+      const { decision } = req.body ?? {};
+      if (decision !== 'allow_once' && decision !== 'deny' && decision !== 'discard') {
+        return reply.code(400).send({ error: 'decision must be allow_once, deny or discard' });
+      }
+      const approval = state.approval(req.params.id);
+      if (!approval) return reply.code(404).send({ error: 'That card is no longer waiting.' });
+      if (!approval.decisions?.includes(decision)) {
+        return reply.code(409).send({ error: "This card can't be answered that way from the office. Open it in Grok Bot." });
+      }
+      if (approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now()) {
+        return reply.code(409).send({ error: 'That card has expired.' });
+      }
+      opts.audit?.decidedInOffice(approval.id);
+      try {
+        const result = await source.resolveApproval(approval, decision);
+        return reply.code(200).send({ result });
+      } catch (err) {
+        return reply.code(502).send({ error: err instanceof Error ? err.message : String(err) });
+      }
+    });
     app.post('/api/reconnect', async (_req, reply) => {
       await source.reconnect();
       return reply.code(204).send();

@@ -77,6 +77,12 @@ export class OfficeState {
     }
   }
 
+  /** The pending approval with this id, if any. */
+  approval(id: string): Approval | undefined {
+    for (const entry of this.entries.values()) if (entry.bot.approval?.id === id) return structuredClone(entry.bot.approval);
+    return undefined;
+  }
+
   has(id: string): boolean {
     return this.entries.has(id);
   }

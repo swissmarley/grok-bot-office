@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { config, MOCK_TIME_SCALE, scaledThresholds, thresholds } from './config.js';
+import { AuditLog } from './audit.js';
 import { Auth } from './auth.js';
 import { buildApp } from './app.js';
 import { DeskRegistry } from './desks.js';
@@ -27,7 +28,11 @@ const source: BotSource = mock
       showcase: process.env.GBO_MOCK_SHOWCASE === '1',
     })
   : new BridgeSource();
-const app = buildApp(state, auth, source, { staticDir: config.staticDir });
+const audit = new AuditLog(join(config.dataDir, mock ? 'audit.mock.log' : 'audit.log'), (id) => {
+  return state.snapshot().bots.find((b) => b.id === id)?.name ?? id;
+});
+state.subscribe(audit.onEvent);
+const app = buildApp(state, auth, source, { staticDir: config.staticDir, audit });
 
 await app.listen({ host: config.host, port: config.port });
 const tick = setInterval(() => state.tick(), config.tickMs);

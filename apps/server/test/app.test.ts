@@ -1,10 +1,11 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import type { OfficeEvent } from '@grok-office/shared';
+import { AuditLog } from '../src/audit.js';
 import { Auth } from '../src/auth.js';
 import { buildApp } from '../src/app.js';
 import { thresholds } from '../src/config.js';
@@ -29,8 +30,17 @@ const source: BotSource = {
     throw new Error('Grok Bot is not running');
   },
   reconnect: async () => void calls.push('reconnect'),
+  resolveApproval: async (approval, decision) => {
+    calls.push(`resolve ${approval.id} ${decision}`);
+    const result = decision === 'allow_once' ? 'allowed' : 'denied';
+    state.sink.approvalResolved(approval.id, result);
+    return result;
+  },
 };
-const app = buildApp(state, auth, source);
+const auditFile = join(mkdtempSync(join(tmpdir(), 'gbo-audit-')), 'audit.log');
+const audit = new AuditLog(auditFile, (id) => state.snapshot().bots.find((b) => b.id === id)?.name ?? id);
+state.subscribe(audit.onEvent);
+const app = buildApp(state, auth, source, { audit });
 let base = '';
 
 beforeAll(async () => {
@@ -118,5 +128,54 @@ describe('bot actions', () => {
     expect(res.statusCode).toBe(204);
     expect(state.snapshot().bots[0]!.role).toBe('Lead');
     expect((await app.inject({ method: 'POST', url: '/api/bots/a/role', headers, payload: { role: 7 } })).statusCode).toBe(400);
+  });
+});
+
+describe('approvals', () => {
+  const cookie = () => auth.sessionCookie().split(';')[0]!;
+  const card = (id: string, extra: Record<string, unknown> = {}) =>
+    state.sink.approvalRequested({
+      id, botId: 'a', action: 'Run a command', target: 'ls ~', inputs: {}, origin: 'chat',
+      createdAt: new Date().toISOString(), kind: 'approval', decisions: ['allow_once', 'deny'], ...extra,
+    });
+  const answer = (id: string, decision: unknown, headers: Record<string, string> = { ...browser, cookie: cookie() }) =>
+    app.inject({ method: 'POST', url: `/api/approvals/${id}`, headers, payload: { decision } });
+
+  it('need the session cookie and a local origin', async () => {
+    card('c1');
+    expect((await answer('c1', 'deny', browser)).statusCode).toBe(401);
+    expect((await answer('c1', 'deny', { ...browser, cookie: cookie(), origin: 'https://evil.example' })).statusCode).toBe(403);
+    expect(calls.filter((c) => c.startsWith('resolve'))).toEqual([]);
+  });
+
+  it('Allow once and Deny reach the source, the result comes back and lands in audit.log', async () => {
+    const ok = await answer('c1', 'allow_once');
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toEqual({ result: 'allowed' });
+    card('c2');
+    expect((await answer('c2', 'deny')).json()).toEqual({ result: 'denied' });
+    await audit.flushed();
+    const lines = readFileSync(auditFile, 'utf8').trim().split('\n').map((l) => l.split('\t'));
+    expect(lines.map((l) => l.slice(1))).toEqual([
+      ['A', 'Run a command ls ~', 'allowed', 'office'],
+      ['A', 'Run a command ls ~', 'denied', 'office'],
+    ]);
+  });
+
+  it('refuses always allow, decisions the card does not offer, expired and unknown cards', async () => {
+    card('c3', { decisions: [] });
+    expect((await answer('c3', 'always')).statusCode).toBe(400);
+    expect((await answer('c3', 'allow_once')).statusCode).toBe(409);
+    state.sink.approvalResolved('c3', 'expired');
+    card('c4', { expiresAt: new Date(Date.now() - 1000).toISOString(), origin: 'routine' });
+    expect((await answer('c4', 'deny')).statusCode).toBe(409);
+    expect((await answer('nope', 'deny')).statusCode).toBe(404);
+    expect(calls.filter((c) => c.startsWith('resolve'))).toEqual(['resolve c1 allow_once', 'resolve c2 deny']);
+  });
+
+  it('logs expired cards too', async () => {
+    state.sink.approvalResolved('c4', 'expired');
+    await audit.flushed();
+    expect(readFileSync(auditFile, 'utf8').trim().split('\n').at(-1)).toMatch(/\tA\tRun a command ls ~\texpired\t-$/);
   });
 });
