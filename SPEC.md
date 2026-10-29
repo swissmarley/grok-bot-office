@@ -237,27 +237,27 @@ L'ufficio può approvare azioni reali dei tuoi bot, quindi va trattato come un t
 Si parte dalla modalità mock, così scena e pannelli si costruiscono senza toccare l'app; il bridge entra solo alla M3.
 
 1. **M0 · Mock**: generatore di eventi con 5 bot (Scout Research, Brush Design, Patch Code, Tally Finance, Relay Social) che girano tra tutti gli stati.
-   - [ ] `pnpm dev --mock` mostra l'ufficio senza Grok Bot installato
-   - [ ] Ogni stato compare almeno una volta in 2 minuti
+   - [x] `pnpm dev --mock` mostra l'ufficio senza Grok Bot installato
+   - [x] Ogni stato compare almeno una volta in 2 minuti
 2. **M1 · Scena**: stanza, scrivanie, bot, animazioni di stato, ora del giorno.
-   - [ ] Click su un bot lo seleziona e centra la camera
-   - [ ] Night accende lampade e stelle; reduced motion toglie i rimbalzi
+   - [x] Click su un bot lo seleziona e centra la camera
+   - [x] Night accende lampade e stelle; reduced motion toglie i rimbalzi
 3. **M2 · Pannelli**: header, Team, Dettaglio, Activity, footer, toast.
-   - [ ] Contatori e scena restano coerenti con lo stato del server
-   - [ ] Layout mobile utilizzabile a 390 px di larghezza
+   - [x] Contatori e scena restano coerenti con lo stato del server
+   - [x] Layout mobile utilizzabile a 390 px di larghezza
 4. **M3 · Bridge live**: adapter su `bots`, `watch`, `read`, con riconnessione.
-   - [ ] Un messaggio mandato a un bot dall'app compare nel log entro 2 s
-   - [ ] Chiudendo l'app il badge passa a Disconnected e si riprende da solo
+   - [x] Un messaggio mandato a un bot dall'app compare nel log entro 2 s
+   - [x] Chiudendo l'app il badge passa a Disconnected e si riprende da solo
 5. **M4 · Attività fini**: fork per gli step dei tool, mapping coding / browsing / terminal.
-   - [ ] Un bot che apre il browser passa a browsing
-   - [ ] Se il fork fallisce, gli stati collassano in thinking senza errori in UI
+   - [x] Un bot che apre il browser passa a browsing
+   - [x] Se il fork fallisce, gli stati collassano in thinking senza errori in UI
 6. **M5 · Approvazioni**: V1, poi V2.
-   - [ ] V1: needs_you compare entro 2 s e Apri in Grok Bot porta sulla conversazione giusta
+   - [x] V1: needs_you compare entro 2 s e Apri in Grok Bot porta sulla conversazione giusta
    - [ ] V2: Allow once e Deny funzionano, l'esito è nel toast e in `audit.log`
    - [ ] Card scadute diventano Expired senza pulsanti
 7. **M6 · Rifinitura**: audio, notifiche, avvio con un comando (`npx grok-office`) che lancia server e browser.
-   - [ ] 60 fps su M1 con 12 bot
-   - [ ] README con setup, rischi della porta debug e `grokbot restore`
+   - [x] 60 fps su M1 con 12 bot
+   - [x] README con setup, rischi della porta debug e `grokbot restore`
 
 ## Prompt per Claude Code
 

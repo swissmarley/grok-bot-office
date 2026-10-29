@@ -1,0 +1,24 @@
+{
+  "name": "grok-bot-office",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "start": "node scripts/start.mjs",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "bin": {
+    "grok-office": "scripts/start.mjs"
+  }
+}

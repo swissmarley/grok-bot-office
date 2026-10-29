@@ -1,0 +1,15 @@
+{
+  "name": "@grok-office/shared",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3"
+  }
+}

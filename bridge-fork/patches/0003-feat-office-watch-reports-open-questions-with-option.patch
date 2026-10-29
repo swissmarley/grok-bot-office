@@ -1,0 +1,466 @@
+From 684b125408a85bd8ab3c20f9e3add84fb4457553 Mon Sep 17 00:00:00 2001
+From: Nakya <nakya@Mac-mini-di-Nakya.local>
+Date: Thu, 29 Oct 2026 21:40:27 +0100
+Subject: [PATCH 3/3] feat: office-watch reports open questions with options
+
+A question with options is a send-message/widget entry; the app doesn't set
+awaitingUserResponse for it, so office-watch follows each conversation and
+emits {type:'question', open} when one is waiting for an answer or gets one.
+internals adds a transcript check.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ README.md                             |  2 +-
+ dist/cli.js                           | 57 ++++++++++++++++--
+ src/adapter/grokbot-internals.test.ts | 84 +++++++++++++++++++++++++--
+ src/adapter/grokbot-internals.ts      | 70 +++++++++++++++++++---
+ src/cli.ts                            |  4 +-
+ 5 files changed, 196 insertions(+), 21 deletions(-)
+
+diff --git a/README.md b/README.md
+index 70e12c4..99a84fa 100644
+--- a/README.md
++++ b/README.md
+@@ -113,7 +113,7 @@ This fork adds what [Grok Bot Office](https://github.com/swissmarley/grok-bot-of
+ 
+ - `grokbot bots --json` also gives each Bot's `avatar` (`shape`, `color`, `hasPhoto`), whether it is the `main` Bot, and the Bot computer's `computerPhase`. If the adapter can't read them, the plain list still works.
+ - `grokbot open <bot>` shows that Bot's conversation and brings Grok Bot to the front, like clicking it in the sidebar. Focusing the window wakes the Bot's computer, so use it only when the user asks.
+-- `grokbot office-watch` streams, as JSON lines, the tool each Bot is using (`browser`, `shell`, `file`, `editor`, or `null` while thinking or idle). Bots that write their own status line ("cercando sul web") expose only that text, passed on as `status`. `bots --json` carries the same `tool`, `toolName` and `status`.
++- `grokbot office-watch` streams, as JSON lines, the tool each Bot is using (`browser`, `shell`, `file`, `editor`, or `null` while thinking or idle). Bots that write their own status line ("cercando sul web") expose only that text, passed on as `status`. `bots --json` carries the same `tool`, `toolName` and `status`. It also says when a Bot's question with options is waiting for your answer (`{"type":"question","open":true}`), which the app itself doesn't count as waiting on you.
+ - `grokbot internals` reports which of these pieces the current app version still exposes (`--json` for scripts).
+ 
+ `bun test` runs the adapter against a fake renderer shaped like Grok Bot 0.78.1.
+diff --git a/dist/cli.js b/dist/cli.js
+index 182fd5d..091833f 100755
+--- a/dist/cli.js
++++ b/dist/cli.js
+@@ -454,6 +454,15 @@ var NAMES = {
+     ],
+     editor: ["CloudAgent"]
+   },
++  transcript: {
++    store: "transcript",
++    method: "snapshotsFor",
++    observe: "observeEntries",
++    load: "load",
++    entryKind: "send-message",
++    widgetType: "widget",
++    answered: ["respondedValue", "widgetSkipped", "widgetDismissed"]
++  },
+   mainAgent: { store: "mainAgent", method: "ensureDefault" },
+   selection: { store: "selection", method: "select", current: "readCurrentAgentId" },
+   desktop: { store: "desktop", method: "focusWindow" }
+@@ -465,6 +474,20 @@ var STORES = `
+   const mainAgent = ${store(NAMES.mainAgent.store, NAMES.mainAgent.method)};
+   const selection = ${store(NAMES.selection.store, NAMES.selection.method)};
+   const desktop = ${store(NAMES.desktop.store, NAMES.desktop.method)};
++  const transcript = ${store(NAMES.transcript.store, NAMES.transcript.method)};
++  const isUserEntry = (e) => (e.kind === "message" && e.role === "user") || e.kind === "user-attachment";
++  /** Whether the Bot's latest question with options, since your last message, is still unanswered. */
++  const openQuestion = (id) => {
++    const q = NAMES.transcript;
++    let entries;
++    try { entries = transcript[q.method](id).get().entries || []; } catch { return false; }
++    for (let i = entries.length - 1; i >= 0 && i >= entries.length - 40; i--) {
++      const e = entries[i];
++      if (isUserEntry(e)) return false;
++      if (e.kind === q.entryKind && e.message && e.message.type === q.widgetType) return !q.answered.some((k) => e[k] != null && e[k] !== false);
++    }
++    return false;
++  };
+   const mainId = () => {
+     try { const s = mainAgent && mainAgent.snapshots.get(); return (s && s.value && s.value.agentId) || null; } catch { return null; }
+   };
+@@ -518,6 +541,7 @@ var PAGE_INTERNALS = `async () => {${STORES}
+       computerPhase: phase() !== null,
+       selection: !!selection && typeof selection[NAMES.selection.current] === "function",
+       focusWindow: !!desktop && typeof desktop[NAMES.desktop.method] === "function",
++      transcript: !!transcript && typeof transcript[NAMES.transcript.observe] === "function",
+       toolSteps: rows.some(working) ? rows.filter(working).some((r) => NAMES.activity.field in r) : null,
+     },
+   };
+@@ -543,18 +567,40 @@ var PAGE_TOOL_WATCH = `async (beat, sink) => {${STORES}
+   const alive = () => Date.now() - (g[beat] || Date.now()) < 45000;
+   const emit = (ev) => { try { if (typeof window[sink] === "function") window[sink](JSON.stringify(ev)); } catch {} };
+   const last = new Map();
++  const asked = new Map();
++  const released = new Map();
+   let finish;
+   const finished = new Promise((resolve) => { finish = resolve; });
+   const tick = () => {
+     if (!alive()) return finish();
+     for (const r of roster.snapshots.get().agents.rows) {
+       if (r.isGroup) continue;
++      if (transcript && !released.has(r.id)) follow(r.id);
++      const at = new Date().toISOString();
+       const t = toolOf(r), key = JSON.stringify(t);
+-      if (last.get(r.id) === key) continue;
+-      last.set(r.id, key);
+-      emit({ type: "tool", bot: r.name, id: r.id, ...t, at: new Date().toISOString() });
++      if (last.get(r.id) !== key) {
++        last.set(r.id, key);
++        emit({ type: "tool", bot: r.name, id: r.id, ...t, at });
++      }
++      const open = transcript ? openQuestion(r.id) : false;
++      if (asked.get(r.id) !== open) {
++        asked.set(r.id, open);
++        emit({ type: "question", bot: r.name, id: r.id, open, at });
++      }
+     }
+   };
++  // Keep each conversation loaded and live while watching, as the upstream watch does.
++  const follow = (id) => {
++    const q = NAMES.transcript;
++    released.set(id, () => {});
++    try {
++      const stopObserving = transcript[q.observe](id, () => {});
++      const snaps = transcript[q.method](id);
++      if (snaps.get().loadState !== "ready") transcript[q.load](id);
++      const unsub = snaps.subscribe(() => tick());
++      released.set(id, () => { if (typeof unsub === "function") unsub(); if (typeof stopObserving === "function") stopObserving(); });
++    } catch {}
++  };
+   const unsub = roster.snapshots.subscribe(tick);
+   g.ticks = g.ticks || {};
+   g.ticks[beat] = tick;
+@@ -564,6 +610,7 @@ var PAGE_TOOL_WATCH = `async (beat, sink) => {${STORES}
+   await finished;
+   clearInterval(iv);
+   if (typeof unsub === "function") unsub();
++  for (const release of released.values()) release();
+   delete g.ticks[beat];
+   delete g[beat];
+ }`;
+@@ -1287,7 +1334,7 @@ Usage:
+   grokbot routines run <bot> <routine>   Run a routine now (needs its computer awake)
+   grokbot bots                      List your Bots and what each is doing (--json adds avatar, main, tool and computerPhase)
+   grokbot open <bot>                Show the Bot's conversation and bring Grok Bot to the front
+-  grokbot office-watch              Stream the tool each Bot is using (browser, shell, file, editor) or its status line, as JSON lines
++  grokbot office-watch              Stream each Bot's tool (browser, shell, file, editor) or status line, and open questions, as JSON lines
+   grokbot internals                 Check which app internals the office adapter can reach
+   grokbot create <name>             Create a Bot (--description <text>)
+   grokbot update <bot>              Rename a Bot or change its description (--name, --description)
+@@ -1611,7 +1658,7 @@ ${formatUsage(s.usage)}` : ""}`);
+     }
+     case "office-watch": {
+       await withApp2((c) => {
+-        console.error("[grokbot] Watching tool steps. Press Ctrl-C to stop.");
++        console.error("[grokbot] Watching tool steps and open questions. Press Ctrl-C to stop.");
+         return officeWatch(c, (e) => console.log(JSON.stringify(e)));
+       });
+       return;
+diff --git a/src/adapter/grokbot-internals.test.ts b/src/adapter/grokbot-internals.test.ts
+index 974357d..ed3b1b3 100644
+--- a/src/adapter/grokbot-internals.test.ts
++++ b/src/adapter/grokbot-internals.test.ts
+@@ -6,7 +6,16 @@ import { PAGE_INTERNALS, PAGE_OFFICE_INFO, PAGE_OPEN, PAGE_TOOL_WATCH } from "./
+ 
+ type Row = Record<string, unknown>;
+ 
+-function fakeApp(opts: { rows?: Row[]; mainId?: string | null; phase?: string; selection?: boolean; selectTakes?: "id" | "object" } = {}) {
++function fakeApp(
++  opts: {
++    rows?: Row[];
++    mainId?: string | null;
++    phase?: string;
++    selection?: boolean;
++    selectTakes?: "id" | "object";
++    entries?: Record<string, Row[]>;
++  } = {},
++) {
+   const calls: string[] = [];
+   let current: string | null = null;
+   const rows = opts.rows ?? [
+@@ -31,6 +40,7 @@ function fakeApp(opts: { rows?: Row[]; mainId?: string | null; phase?: string; s
+     { id: "g", name: "Group", isGroup: true },
+   ];
+   const subscribers: (() => void)[] = [];
++  const entries = opts.entries ?? {};
+   const ctx: Record<string, unknown> = {
+     roster: {
+       createAgent: () => calls.push("createAgent"),
+@@ -47,6 +57,17 @@ function fakeApp(opts: { rows?: Row[]; mainId?: string | null; phase?: string; s
+       snapshots: { get: () => ({ status: "ready", value: opts.mainId === null ? null : { agentId: opts.mainId ?? "a" } }) },
+     },
+     boxHostPhase: { snapshots: { get: () => opts.phase ?? "settled" } },
++    transcript: {
++      snapshotsFor: (id: string) => ({
++        get: () => ({ loadState: "ready", entries: entries[id] ?? [] }),
++        subscribe: (fn: () => void) => {
++          subscribers.push(fn);
++          return () => subscribers.splice(subscribers.indexOf(fn), 1);
++        },
++      }),
++      observeEntries: () => () => {},
++      load: () => calls.push("load"),
++    },
+     desktop: { focusWindow: async () => void calls.push("focusWindow") },
+   };
+   if (opts.selection !== false) {
+@@ -68,7 +89,7 @@ function fakeApp(opts: { rows?: Row[]; mainId?: string | null; phase?: string; s
+   const changed = () => {
+     for (const fn of [...subscribers]) fn();
+   };
+-  return { calls, rows, changed, subscribers };
++  return { calls, rows, changed, subscribers, entries };
+ }
+ 
+ // Indirect eval, like CDP's Runtime.evaluate: the page code sees only globals.
+@@ -106,7 +127,16 @@ describe("internals check", () => {
+     fakeApp();
+     expect(await run(PAGE_INTERNALS)).toEqual({
+       appVersion: "0.78.1",
+-      checks: { roster: true, avatars: true, mainAgent: true, computerPhase: true, selection: true, focusWindow: true, toolSteps: null },
++      checks: {
++        roster: true,
++        avatars: true,
++        mainAgent: true,
++        computerPhase: true,
++        selection: true,
++        focusWindow: true,
++        transcript: true,
++        toolSteps: null,
++      },
+     });
+   });
+ 
+@@ -185,7 +215,7 @@ describe("tool steps", () => {
+ 
+   test("office-watch emits each Bot once, then only changes, and ends with the heartbeat", async () => {
+     const app = fakeApp({ rows: [working({ kind: "thinking" })] });
+-    const events: { bot: string; id: string; tool: unknown; name: unknown; status: unknown }[] = [];
++    const events: { type: string; bot: string; id: string; tool: unknown; name: unknown; status: unknown; open?: boolean }[] = [];
+     const g = globalThis as Record<string, unknown>;
+     g.__sink = (p: string) => events.push(JSON.parse(p));
+     const beat = "beat_test";
+@@ -193,7 +223,8 @@ describe("tool steps", () => {
+     g.__grokbot = grok;
+     const done = run(PAGE_TOOL_WATCH, beat, "__sink");
+     await Promise.resolve();
+-    expect(events.map((e) => [e.id, e.tool, e.name])).toEqual([["w", null, null]]);
++    const tools = () => events.filter((e) => e.type === "tool");
++    expect(tools().map((e) => [e.id, e.tool, e.name])).toEqual([["w", null, null]]);
+ 
+     app.rows[0] = working({ kind: "tool", tool: "WebFetch" });
+     app.changed();
+@@ -204,7 +235,7 @@ describe("tool steps", () => {
+     app.changed();
+     app.rows[0] = working({ kind: "tool", tool: "SetStatus", detail: "eseguendo comandi" });
+     app.changed();
+-    expect(events.map((e) => [e.tool, e.name, e.status])).toEqual([
++    expect(tools().map((e) => [e.tool, e.name, e.status])).toEqual([
+       [null, null, null],
+       ["browser", "WebFetch", null],
+       ["shell", "Shell", null],
+@@ -220,3 +251,44 @@ describe("tool steps", () => {
+     delete g.__grokbot;
+   });
+ });
++
++describe("open questions", () => {
++  const question = (extra: Row = {}): Row => ({
++    kind: "send-message",
++    id: "q1",
++    requestId: "r1",
++    message: { type: "widget", widget: { prompt: "Approvi?", options: [{ label: "Sì" }] } },
++    ...extra,
++  });
++
++  test("office-watch says when a question with options opens and when it is answered", async () => {
++    const app = fakeApp({
++      rows: [{ id: "a", name: "Ada", isGroup: false }],
++      entries: { a: [{ kind: "message", role: "user", id: "u1" }, question()] },
++    });
++    const events: { type: string; id: string; open?: boolean }[] = [];
++    const g = globalThis as Record<string, unknown>;
++    g.__sink = (p: string) => events.push(JSON.parse(p));
++    const beat = "beat_q";
++    const grok: Record<string, unknown> = { [beat]: Date.now() };
++    g.__grokbot = grok;
++    const done = run(PAGE_TOOL_WATCH, beat, "__sink");
++    await Promise.resolve();
++    const opens = () => events.filter((e) => e.type === "question").map((e) => e.open);
++    expect(opens()).toEqual([true]);
++
++    app.entries.a = [{ kind: "message", role: "user", id: "u1" }, question({ respondedValue: "Sì" })];
++    app.changed();
++    expect(opens()).toEqual([true, false]);
++
++    app.entries.a = [question(), { kind: "message", role: "user", id: "u2" }];
++    app.changed();
++    expect(opens()).toEqual([true, false]);
++
++    grok[beat] = 1; // last heartbeat long ago
++    (grok.ticks as Record<string, () => void>)[beat]();
++    await done;
++    delete g.__sink;
++    delete g.__grokbot;
++  });
++});
+diff --git a/src/adapter/grokbot-internals.ts b/src/adapter/grokbot-internals.ts
+index 9041345..5d06ba0 100644
+--- a/src/adapter/grokbot-internals.ts
++++ b/src/adapter/grokbot-internals.ts
+@@ -59,6 +59,20 @@ export const NAMES = {
+     ],
+     editor: ["CloudAgent"],
+   },
++  /**
++   * A Bot's conversation. A question with options is a `send-message` entry whose message is a
++   * `widget` ({ prompt, options }); it is open until one of the `answered` fields is set. The app
++   * doesn't count it as waiting on you (awaitingUserResponse stays null), so it is read here.
++   */
++  transcript: {
++    store: "transcript",
++    method: "snapshotsFor",
++    observe: "observeEntries",
++    load: "load",
++    entryKind: "send-message",
++    widgetType: "widget",
++    answered: ["respondedValue", "widgetSkipped", "widgetDismissed"],
++  },
+   mainAgent: { store: "mainAgent", method: "ensureDefault" },
+   selection: { store: "selection", method: "select", current: "readCurrentAgentId" },
+   desktop: { store: "desktop", method: "focusWindow" },
+@@ -95,10 +109,13 @@ export type ToolEvent = {
+   at: string;
+ };
+ 
++/** `office-watch` line: a question with options from the Bot opened (waiting on your answer in the app) or closed. */
++export type QuestionEvent = { type: "question"; bot: string; id: string; open: boolean; at: string };
++
+ export type InternalsCheck = {
+   appVersion: string | null;
+   /** `toolSteps` is null while no Bot is working: the app sets the field only during a turn. */
+-  checks: Record<"roster" | "avatars" | "mainAgent" | "computerPhase" | "selection" | "focusWindow", boolean> & {
++  checks: Record<"roster" | "avatars" | "mainAgent" | "computerPhase" | "selection" | "focusWindow" | "transcript", boolean> & {
+     toolSteps: boolean | null;
+   };
+ };
+@@ -112,6 +129,20 @@ const STORES = `
+   const mainAgent = ${store(NAMES.mainAgent.store, NAMES.mainAgent.method)};
+   const selection = ${store(NAMES.selection.store, NAMES.selection.method)};
+   const desktop = ${store(NAMES.desktop.store, NAMES.desktop.method)};
++  const transcript = ${store(NAMES.transcript.store, NAMES.transcript.method)};
++  const isUserEntry = (e) => (e.kind === "message" && e.role === "user") || e.kind === "user-attachment";
++  /** Whether the Bot's latest question with options, since your last message, is still unanswered. */
++  const openQuestion = (id) => {
++    const q = NAMES.transcript;
++    let entries;
++    try { entries = transcript[q.method](id).get().entries || []; } catch { return false; }
++    for (let i = entries.length - 1; i >= 0 && i >= entries.length - 40; i--) {
++      const e = entries[i];
++      if (isUserEntry(e)) return false;
++      if (e.kind === q.entryKind && e.message && e.message.type === q.widgetType) return !q.answered.some((k) => e[k] != null && e[k] !== false);
++    }
++    return false;
++  };
+   const mainId = () => {
+     try { const s = mainAgent && mainAgent.snapshots.get(); return (s && s.value && s.value.agentId) || null; } catch { return null; }
+   };
+@@ -167,6 +198,7 @@ export const PAGE_INTERNALS = `async () => {${STORES}
+       computerPhase: phase() !== null,
+       selection: !!selection && typeof selection[NAMES.selection.current] === "function",
+       focusWindow: !!desktop && typeof desktop[NAMES.desktop.method] === "function",
++      transcript: !!transcript && typeof transcript[NAMES.transcript.observe] === "function",
+       toolSteps: rows.some(working) ? rows.filter(working).some((r) => NAMES.activity.field in r) : null,
+     },
+   };
+@@ -194,7 +226,8 @@ export const PAGE_OPEN = `async (id) => {${STORES}
+ }`;
+ 
+ /**
+- * Streams the tool each Bot is using, or its own status line: one event per Bot on start, then one whenever it changes.
++ * Streams the tool each Bot is using, or its own status line, and whether it has an unanswered question
++ * with options: one event of each per Bot on start, then one whenever it changes.
+  * Kept alive by the CLI's heartbeat, like the upstream `watch`; ends when the heartbeats stop.
+  */
+ export const PAGE_TOOL_WATCH = `async (beat, sink) => {${STORES}
+@@ -203,18 +236,40 @@ export const PAGE_TOOL_WATCH = `async (beat, sink) => {${STORES}
+   const alive = () => Date.now() - (g[beat] || Date.now()) < 45000;
+   const emit = (ev) => { try { if (typeof window[sink] === "function") window[sink](JSON.stringify(ev)); } catch {} };
+   const last = new Map();
++  const asked = new Map();
++  const released = new Map();
+   let finish;
+   const finished = new Promise((resolve) => { finish = resolve; });
+   const tick = () => {
+     if (!alive()) return finish();
+     for (const r of roster.snapshots.get().agents.rows) {
+       if (r.isGroup) continue;
++      if (transcript && !released.has(r.id)) follow(r.id);
++      const at = new Date().toISOString();
+       const t = toolOf(r), key = JSON.stringify(t);
+-      if (last.get(r.id) === key) continue;
+-      last.set(r.id, key);
+-      emit({ type: "tool", bot: r.name, id: r.id, ...t, at: new Date().toISOString() });
++      if (last.get(r.id) !== key) {
++        last.set(r.id, key);
++        emit({ type: "tool", bot: r.name, id: r.id, ...t, at });
++      }
++      const open = transcript ? openQuestion(r.id) : false;
++      if (asked.get(r.id) !== open) {
++        asked.set(r.id, open);
++        emit({ type: "question", bot: r.name, id: r.id, open, at });
++      }
+     }
+   };
++  // Keep each conversation loaded and live while watching, as the upstream watch does.
++  const follow = (id) => {
++    const q = NAMES.transcript;
++    released.set(id, () => {});
++    try {
++      const stopObserving = transcript[q.observe](id, () => {});
++      const snaps = transcript[q.method](id);
++      if (snaps.get().loadState !== "ready") transcript[q.load](id);
++      const unsub = snaps.subscribe(() => tick());
++      released.set(id, () => { if (typeof unsub === "function") unsub(); if (typeof stopObserving === "function") stopObserving(); });
++    } catch {}
++  };
+   const unsub = roster.snapshots.subscribe(tick);
+   g.ticks = g.ticks || {};
+   g.ticks[beat] = tick;
+@@ -224,6 +279,7 @@ export const PAGE_TOOL_WATCH = `async (beat, sink) => {${STORES}
+   await finished;
+   clearInterval(iv);
+   if (typeof unsub === "function") unsub();
++  for (const release of released.values()) release();
+   delete g.ticks[beat];
+   delete g[beat];
+ }`;
+@@ -236,8 +292,8 @@ export async function internalsCheck(cdp: CDP): Promise<InternalsCheck> {
+   return cdp.call<InternalsCheck>(PAGE_INTERNALS);
+ }
+ 
+-/** Streams tool changes for every Bot until the process exits. */
+-export async function officeWatch(cdp: CDP, onEvent: (e: ToolEvent) => void): Promise<void> {
++/** Streams tool and open-question changes for every Bot until the process exits. */
++export async function officeWatch(cdp: CDP, onEvent: (e: ToolEvent | QuestionEvent) => void): Promise<void> {
+   await cdp.send("Runtime.enable");
+   const sink = await cdp.bind((p) => onEvent(JSON.parse(p)));
+   await withHeartbeat(cdp, (beat) => cdp.call(PAGE_TOOL_WATCH, beat, sink));
+diff --git a/src/cli.ts b/src/cli.ts
+index 7cc46e0..238f9ee 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -41,7 +41,7 @@ Usage:
+   grokbot routines run <bot> <routine>   Run a routine now (needs its computer awake)
+   grokbot bots                      List your Bots and what each is doing (--json adds avatar, main, tool and computerPhase)
+   grokbot open <bot>                Show the Bot's conversation and bring Grok Bot to the front
+-  grokbot office-watch              Stream the tool each Bot is using (browser, shell, file, editor) or its status line, as JSON lines
++  grokbot office-watch              Stream each Bot's tool (browser, shell, file, editor) or status line, and open questions, as JSON lines
+   grokbot internals                 Check which app internals the office adapter can reach
+   grokbot create <name>             Create a Bot (--description <text>)
+   grokbot update <bot>              Rename a Bot or change its description (--name, --description)
+@@ -365,7 +365,7 @@ async function main() {
+     }
+     case "office-watch": {
+       await withApp((c) => {
+-        console.error("[grokbot] Watching tool steps. Press Ctrl-C to stop.");
++        console.error("[grokbot] Watching tool steps and open questions. Press Ctrl-C to stop.");
+         return officeWatch(c, (e) => console.log(JSON.stringify(e)));
+       });
+       return;
+-- 
+2.50.1 (Apple Git-155)
+

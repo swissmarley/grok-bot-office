@@ -1,0 +1,441 @@
+import { AVATAR_COLORS, type Approval, type BotAvatar, type Task } from '@grok-office/shared';
+import type { Thresholds } from '../config.js';
+import type { BotSignals, BotSource, SourceSink, ToolKind } from './source.js';
+
+// Scripted bots that loop through every office state. Durations are in real
+// milliseconds; the office runs mock mode with compressed thresholds so that
+// done → idle → sleeping also happen within a couple of minutes.
+
+type Phase =
+  | { kind: 'work'; tool: ToolKind | null; activity: string; ms: number; reply?: string; step?: boolean }
+  | { kind: 'error'; activity: string; ms: number; reply: string }
+  | {
+      kind: 'approval';
+      origin: Approval['origin'];
+      action: string;
+      target: string;
+      inputs: Record<string, unknown>;
+      /** For chat approvals: how long until you "answer in the app". Others wait for expiry. */
+      ms?: number;
+    }
+  | { kind: 'rest'; ms: number }
+  | { kind: 'asleep'; ms: number };
+
+/** Grok Bot avatars for the mock bots (cycled for copies and the showcase). */
+const MOCK_AVATARS: { color: string; avatar: BotAvatar }[] = [
+  { color: AVATAR_COLORS.blue, avatar: { shape: 'teardrop' } },
+  { color: AVATAR_COLORS.red, avatar: { shape: 'heart' } },
+  { color: AVATAR_COLORS.green, avatar: { shape: 'wedge' } },
+  { color: AVATAR_COLORS.cyan, avatar: { shape: 'hex' } },
+  { color: AVATAR_COLORS.yellow, avatar: { shape: 'clover' } },
+  { color: AVATAR_COLORS.black, avatar: { shape: 'blob' } },
+  { color: AVATAR_COLORS.violet, avatar: { shape: 'star' } },
+  { color: AVATAR_COLORS.orange, avatar: { shape: 'pumpkin' } },
+  { color: AVATAR_COLORS.pink, avatar: { shape: 'cloud' } },
+  { color: AVATAR_COLORS.brown, avatar: { shape: 'square' } },
+  { color: AVATAR_COLORS.gray, avatar: { shape: 'sparkle' } },
+  { color: AVATAR_COLORS.violet, avatar: { shape: 'flower' } },
+  { color: AVATAR_COLORS.blue, avatar: { shape: 'pill' } },
+  { color: AVATAR_COLORS.green, avatar: { shape: 'pentagon' } },
+];
+
+interface Script {
+  id: string;
+  name: string;
+  description: string;
+  tasks: { title: string; steps?: number; phases: Phase[] }[];
+}
+
+const S = 1000;
+
+export const MOCK_SCRIPTS: Script[] = [
+  {
+    id: 'mock-scout',
+    name: 'Scout',
+    description: 'Research agent for market, pricing and competitor questions',
+    tasks: [
+      {
+        title: 'Compare pricing of the top 9 CRMs',
+        steps: 4,
+        phases: [
+          { kind: 'work', tool: 'browser', activity: 'Reading 9 pricing pages', ms: 10 * S, step: true, reply: 'Found pricing pages for all 9 CRMs.' },
+          { kind: 'work', tool: null, activity: 'Comparing seat tiers', ms: 6 * S, step: true },
+          { kind: 'work', tool: 'browser', activity: 'Checking G2 reviews', ms: 8 * S, step: true, reply: 'Pulled ratings from G2 for each tier.' },
+          { kind: 'work', tool: 'file', activity: 'Writing pricing table', ms: 6 * S, step: true, reply: 'Table ready: HubSpot and Pipedrive are cheapest under 10 seats.' },
+          { kind: 'rest', ms: 25 * S },
+        ],
+      },
+      {
+        title: 'Summarize this week in AI agents',
+        phases: [
+          { kind: 'work', tool: 'browser', activity: 'Skimming 14 articles', ms: 9 * S, reply: 'Shortlisted 6 articles worth reading.' },
+          { kind: 'work', tool: null, activity: 'Drafting the summary', ms: 7 * S, reply: 'Summary drafted, 5 bullets.' },
+          { kind: 'rest', ms: 45 * S },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'mock-brush',
+    name: 'Brush',
+    description: 'Design partner for landing pages and social visuals',
+    tasks: [
+      {
+        title: 'Refresh the landing page hero',
+        steps: 3,
+        phases: [
+          { kind: 'work', tool: null, activity: 'Sketching hero layouts', ms: 6 * S, step: true },
+          { kind: 'work', tool: 'file', activity: 'Exporting 3 hero variants', ms: 8 * S, step: true, reply: 'Exported 3 variants to /designs/hero.' },
+          {
+            kind: 'approval',
+            origin: 'routine',
+            action: 'Upload files',
+            target: 'Figma · Marketing / Landing',
+            inputs: { files: ['hero-a.png', 'hero-b.png', 'hero-c.png'], overwrite: false },
+          },
+          { kind: 'rest', ms: 15 * S },
+          { kind: 'asleep', ms: 20 * S },
+        ],
+      },
+      {
+        title: 'Make 4 carousel slides for the launch',
+        phases: [
+          { kind: 'work', tool: 'editor', activity: 'Laying out slide 1 of 4', ms: 9 * S },
+          { kind: 'work', tool: 'browser', activity: 'Looking for reference shots', ms: 7 * S, reply: 'Slides done, sending previews.' },
+          { kind: 'rest', ms: 40 * S },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'mock-patch',
+    name: 'Patch',
+    description: 'Code maintainer for the web app and its CI',
+    tasks: [
+      {
+        title: 'Fix the flaky checkout test',
+        steps: 4,
+        phases: [
+          { kind: 'work', tool: 'editor', activity: 'Reading checkout.spec.ts', ms: 8 * S, step: true },
+          { kind: 'work', tool: 'shell', activity: 'Running the test suite', ms: 6 * S, step: true },
+          { kind: 'error', activity: '2 tests failing in checkout', ms: 5 * S, reply: 'Error: 2 tests failed (timeout in payment mock).' },
+          { kind: 'work', tool: 'editor', activity: 'Patching the payment mock', ms: 6 * S, step: true },
+          { kind: 'work', tool: 'git', activity: 'Committing the fix', ms: 4 * S },
+          { kind: 'work', tool: 'shell', activity: 'Re-running the suite', ms: 5 * S, step: true, reply: 'All 212 tests pass. Fix pushed to fix/checkout-flake.' },
+          { kind: 'rest', ms: 40 * S },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'mock-tally',
+    name: 'Tally',
+    description: 'Finance bookkeeper for invoices and the monthly close',
+    tasks: [
+      {
+        title: 'Reconcile October invoices',
+        phases: [
+          { kind: 'work', tool: 'shell', activity: 'Exporting invoices to CSV', ms: 5 * S },
+          { kind: 'work', tool: null, activity: 'Matching 48 payments', ms: 4 * S, reply: '46 of 48 invoices matched; 2 need a look.' },
+          { kind: 'rest', ms: 105 * S },
+          { kind: 'asleep', ms: 15 * S },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'mock-relay',
+    name: 'Relay',
+    description: 'Social media manager for X and LinkedIn',
+    tasks: [
+      {
+        title: 'Launch thread on X',
+        steps: 4,
+        phases: [
+          { kind: 'work', tool: null, activity: 'Drafting a 6-post thread', ms: 5 * S, step: true, reply: 'Draft ready: 6 posts, 1 image.' },
+          { kind: 'work', tool: 'browser', activity: 'Checking replies on X', ms: 6 * S, step: true },
+          {
+            kind: 'approval',
+            origin: 'chat',
+            action: 'Post thread',
+            target: 'x.com · @nakya',
+            inputs: { posts: 6, first: 'We just shipped Grok Bot Office 🎉', image: 'office.png' },
+            ms: 15 * S,
+          },
+          { kind: 'work', tool: 'browser', activity: 'Posting the thread', ms: 6 * S, step: true, reply: 'Thread is live: 6 posts.' },
+          { kind: 'work', tool: 'browser', activity: 'Watching first replies', ms: 5 * S, step: true },
+          { kind: 'rest', ms: 50 * S },
+        ],
+      },
+    ],
+  },
+];
+
+export interface MockSourceOptions {
+  thresholds: Thresholds;
+  /** Seed for duration jitter, so runs are reproducible. */
+  seed?: number;
+  scripts?: Script[];
+  /** How many bots to run; beyond the five scripts, copies like "Scout 2". */
+  count?: number;
+  /** One bot pinned in each state, for checking the scene. */
+  showcase?: boolean;
+}
+
+/** Rest after you stop a bot, before it picks up its next task. */
+const STOPPED_REST_MS = 20 * S;
+
+interface BotRun {
+  timers: Set<NodeJS.Timeout>;
+  /** Pending approval id, if the bot is waiting on a card. */
+  approvalId?: string;
+  /** Abandons the current task: the next run starts the following one. */
+  skipTask(): void;
+  next(): void;
+}
+
+export class MockSource implements BotSource {
+  readonly kind = 'mock';
+  private readonly runs = new Map<string, BotRun>();
+  private readonly misc = new Set<NodeJS.Timeout>();
+  private sink?: SourceSink;
+  private approvalSeq = 0;
+  private readonly rand: () => number;
+
+  constructor(private readonly opts: MockSourceOptions) {
+    this.rand = mulberry32(opts.seed ?? Date.now());
+  }
+
+  async start(sink: SourceSink): Promise<void> {
+    this.sink = sink;
+    sink.connection('connected', '@mock');
+    if (this.opts.showcase) return showcase(sink, this.opts.thresholds);
+    const scripts = withCopies(this.opts.scripts ?? MOCK_SCRIPTS, this.opts.count);
+    for (const [i, script] of scripts.entries()) {
+      sink.updateBot(script.id, {
+        name: script.name,
+        description: script.description,
+        ...MOCK_AVATARS[i % MOCK_AVATARS.length]!,
+        main: i === 0,
+        activity: 'Waiting for a task',
+      });
+      this.runBot(sink, script);
+    }
+  }
+
+  async stop(): Promise<void> {
+    for (const run of this.runs.values()) this.clear(run);
+    for (const t of this.misc) clearTimeout(t);
+    this.misc.clear();
+  }
+
+  async stopBot(id: string): Promise<void> {
+    const run = this.runs.get(id);
+    const sink = this.sink;
+    if (!run || !sink) throw new Error('No such bot.');
+    this.clear(run);
+    if (run.approvalId) {
+      sink.approvalResolved(run.approvalId, 'denied');
+      run.approvalId = undefined;
+    }
+    sink.activity(id, 'Stopped by you');
+    sink.updateBot(id, {
+      activity: 'Stopped',
+      signals: { working: false, needsInput: false, tool: null, error: false, lastReplyAt: new Date().toISOString() },
+    });
+    run.skipTask();
+    this.after(run, STOPPED_REST_MS, run.next);
+  }
+
+  async openBot(id: string): Promise<void> {
+    if (!this.runs.has(id) && !this.opts.showcase) throw new Error('No such bot.');
+    // Nothing to bring forward in mock mode.
+  }
+
+  async reconnect(): Promise<void> {
+    const sink = this.sink;
+    if (!sink) return;
+    sink.connection('disconnected');
+    const t = setTimeout(() => {
+      this.misc.delete(t);
+      sink.connection('connected', '@mock');
+    }, 800);
+    this.misc.add(t);
+  }
+
+  private runBot(sink: SourceSink, script: Script): void {
+    let taskIndex = 0;
+    let phaseIndex = 0;
+    let task: Task = { title: '', log: [] };
+    let step = 0;
+
+    const reply = (text: string): void => {
+      const at = new Date().toISOString();
+      task = { ...task, log: [{ at, text }, ...task.log].slice(0, 20) };
+      sink.activity(script.id, text, at);
+      sink.updateBot(script.id, { task, unread: task.log.length, signals: { lastReplyAt: at } });
+    };
+
+    const run: BotRun = {
+      timers: new Set(),
+      skipTask: () => {
+        if (phaseIndex !== 0) {
+          phaseIndex = 0;
+          taskIndex = (taskIndex + 1) % script.tasks.length;
+        }
+      },
+      next: () => {
+        const current = script.tasks[taskIndex]!;
+        if (phaseIndex === 0) {
+          step = 0;
+          task = { title: current.title, log: [] };
+          sink.activity(script.id, `New task: ${current.title}`);
+          sink.updateBot(script.id, { task, unread: 0, signals: { computerAsleep: false } });
+        }
+        const phase = current.phases[phaseIndex]!;
+        if (phase.kind === 'work' && phase.step && current.steps) {
+          step = Math.min(step + 1, current.steps);
+          task = { ...task, step: { index: step, total: current.steps } };
+          sink.updateBot(script.id, { task });
+        }
+        phaseIndex++;
+        if (phaseIndex >= current.phases.length) {
+          phaseIndex = 0;
+          taskIndex = (taskIndex + 1) % script.tasks.length;
+        }
+        this.after(run, this.runPhase(sink, run, script.id, phase, task.title, reply), run.next);
+      },
+    };
+    this.runs.set(script.id, run);
+    run.next();
+  }
+
+  /** Starts a phase and returns how long it lasts. */
+  private runPhase(
+    sink: SourceSink,
+    run: BotRun,
+    id: string,
+    phase: Phase,
+    taskTitle: string,
+    reply: (text: string) => void,
+  ): number {
+    switch (phase.kind) {
+      case 'work': {
+        sink.updateBot(id, { activity: phase.activity, signals: { working: true, tool: phase.tool, error: false } });
+        const ms = this.jitter(phase.ms);
+        if (phase.reply) this.after(run, ms - 50, () => reply(phase.reply!));
+        return ms;
+      }
+      case 'error': {
+        sink.updateBot(id, { activity: phase.activity, signals: { working: true, error: true } });
+        reply(phase.reply);
+        return this.jitter(phase.ms);
+      }
+      case 'approval': {
+        const createdAt = new Date();
+        const approval: Approval = {
+          id: `mock-approval-${++this.approvalSeq}`,
+          botId: id,
+          action: phase.action,
+          target: phase.target,
+          inputs: phase.inputs,
+          origin: phase.origin,
+          createdAt: createdAt.toISOString(),
+        };
+        const ms = phase.origin === 'chat' ? this.jitter(phase.ms ?? 15_000) : this.opts.thresholds.approvalTtlMs;
+        if (phase.origin !== 'chat') approval.expiresAt = new Date(createdAt.getTime() + ms).toISOString();
+        sink.updateBot(id, { activity: `Waiting for you: ${phase.action}`, signals: { working: false, needsInput: true } });
+        sink.approvalRequested(approval);
+        run.approvalId = approval.id;
+        this.after(run, ms - 50, () => {
+          run.approvalId = undefined;
+          if (phase.origin === 'chat') {
+            // Mock stand-in for you answering the card in the Grok Bot app (approvals V1).
+            sink.approvalResolved(approval.id, 'allowed');
+            sink.activity(id, `Approved in Grok Bot: ${phase.action}`);
+          } else {
+            sink.approvalResolved(approval.id, 'expired');
+            sink.activity(id, `Approval expired: ${phase.action}`);
+          }
+          sink.updateBot(id, { signals: { needsInput: false } });
+        });
+        return ms;
+      }
+      case 'rest': {
+        const at = new Date().toISOString();
+        sink.updateBot(id, {
+          activity: `Finished: ${taskTitle}`,
+          signals: { working: false, tool: null, error: false, lastReplyAt: at },
+        });
+        return this.jitter(phase.ms);
+      }
+      case 'asleep': {
+        sink.activity(id, 'Computer went to sleep');
+        sink.updateBot(id, { activity: 'Computer asleep', signals: { working: false, computerAsleep: true } });
+        return this.jitter(phase.ms);
+      }
+    }
+  }
+
+  private after(run: BotRun, ms: number, fn: () => void): void {
+    const t = setTimeout(() => {
+      run.timers.delete(t);
+      fn();
+    }, Math.max(0, ms));
+    run.timers.add(t);
+  }
+
+  private clear(run: BotRun): void {
+    for (const t of run.timers) clearTimeout(t);
+    run.timers.clear();
+  }
+
+  private jitter(ms: number): number {
+    return Math.round(ms * (0.85 + this.rand() * 0.3));
+  }
+}
+
+const SHOWCASE: { name: string; activity: string; signals: Partial<BotSignals>; idleMin?: number }[] = [
+  { name: 'Coder', activity: 'Editing checkout.ts', signals: { working: true, tool: 'editor' } },
+  { name: 'Surfer', activity: 'Reading 9 pricing pages', signals: { working: true, tool: 'browser' } },
+  { name: 'Shell', activity: 'Running the test suite', signals: { working: true, tool: 'shell' } },
+  { name: 'Thinker', activity: 'Planning the launch', signals: { working: true, tool: null } },
+  { name: 'Asker', activity: 'Waiting for you: Post thread', signals: { needsInput: true } },
+  { name: 'Oops', activity: '2 tests failing', signals: { working: true, error: true } },
+  { name: 'Finisher', activity: 'Finished: Weekly report', signals: {}, idleMin: 0 },
+  { name: 'Idler', activity: 'Waiting for a task', signals: {}, idleMin: 15 },
+  { name: 'Sleeper', activity: 'Computer asleep', signals: { computerAsleep: true } },
+];
+
+function showcase(sink: SourceSink, t: Thresholds): void {
+  SHOWCASE.forEach((b, i) => {
+    const id = `show-${b.name.toLowerCase()}`;
+    const ago = b.idleMin === undefined ? undefined : new Date(Date.now() - (b.idleMin * 60_000) / (600_000 / t.doneMs)).toISOString();
+    sink.updateBot(id, {
+      name: b.name,
+      description: 'Showcase bot',
+      ...MOCK_AVATARS[i % MOCK_AVATARS.length]!,
+      activity: b.activity,
+      signals: { working: false, needsInput: false, error: false, computerAsleep: false, lastReplyAt: ago, ...b.signals },
+    });
+  });
+}
+
+function withCopies(scripts: Script[], count = scripts.length): Script[] {
+  return Array.from({ length: count }, (_, i) => {
+    const base = scripts[i % scripts.length]!;
+    const copy = Math.floor(i / scripts.length) + 1;
+    return copy === 1 ? base : { ...base, id: `${base.id}-${copy}`, name: `${base.name} ${copy}` };
+  });
+}
+
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
