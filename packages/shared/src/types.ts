@@ -16,11 +16,15 @@ export interface Bot {
   main?: boolean;                           // aggiunta: il bot principale (stellina nell'app)
 }
 
-/** The 14 avatar shapes of Grok Bot's "Create New Bot" picker, in its order. */
+/**
+ * The 14 avatar shapes of Grok Bot's "Create New Bot" picker, in its order. Names are the
+ * app's own `avatarShape` values where seen (Grok Bot 0.78.1); cloud, square, sparkle,
+ * flower, pill and pentagon are ours until a bot with one of them shows the real name.
+ */
 export type AvatarShape =
-  | 'round' | 'cloud' | 'square' | 'sparkle' | 'clover'
-  | 'heart' | 'flower' | 'drop' | 'pill' | 'triangle'
-  | 'pentagon' | 'splat' | 'hexagon' | 'pumpkin';
+  | 'blob' | 'cloud' | 'square' | 'sparkle' | 'clover'
+  | 'heart' | 'flower' | 'teardrop' | 'pill' | 'wedge'
+  | 'pentagon' | 'star' | 'hex' | 'pumpkin';
 
 export interface BotAvatar {
   shape: AvatarShape;
@@ -53,25 +57,51 @@ export const BOT_STATUSES: readonly BotStatus[] = [
 ];
 
 export const AVATAR_SHAPES: readonly AvatarShape[] = [
-  'round', 'cloud', 'square', 'sparkle', 'clover',
-  'heart', 'flower', 'drop', 'pill', 'triangle',
-  'pentagon', 'splat', 'hexagon', 'pumpkin',
+  'blob', 'cloud', 'square', 'sparkle', 'clover',
+  'heart', 'flower', 'teardrop', 'pill', 'wedge',
+  'pentagon', 'star', 'hex', 'pumpkin',
 ];
 
-/** The 11 avatar colors of the same picker, in its order. */
+/**
+ * The 11 avatar colors of the same picker, in its order, by the app's `avatarColor` names
+ * where seen. `black` is the picker's first swatch: the app draws it white on its dark
+ * theme, and so does the office. brown, pink and gray are our guesses so far.
+ */
 export const AVATAR_COLORS = {
-  white: '#FFFFFF',
+  black: '#FFFFFF',
   brown: '#936439',
   red: '#FF263C',
   orange: '#FF6700',
-  amber: '#FF9800',
+  yellow: '#FF9800',
   green: '#00C972',
-  teal: '#00BCA6',
+  cyan: '#00BCA6',
   blue: '#1084FE',
-  purple: '#9159FE',
+  violet: '#9159FE',
   pink: '#FF309B',
   gray: '#777777',
 } as const;
+
+export type AvatarColorName = keyof typeof AVATAR_COLORS;
+
+const SHAPE_ALIASES: Record<string, AvatarShape> = {
+  round: 'blob', circle: 'blob', drop: 'teardrop', triangle: 'wedge', hexagon: 'hex', splat: 'star',
+  diamond: 'square', bean: 'pill', capsule: 'pill', house: 'pentagon',
+};
+const COLOR_ALIASES: Record<string, AvatarColorName> = {
+  white: 'black', amber: 'yellow', teal: 'cyan', purple: 'violet', grey: 'gray', magenta: 'pink',
+};
+
+/**
+ * Grok Bot's avatarShape / avatarColor (as the bridge fork will pass them) → the office's
+ * avatar and color. Unknown names fall back to the blob and no color (the office palette).
+ */
+export function avatarFromApp(shape?: string | null, color?: string | null): { avatar: BotAvatar; color?: string } {
+  const s = (shape ?? '').toLowerCase();
+  const c = (color ?? '').toLowerCase();
+  const known = (AVATAR_SHAPES as readonly string[]).includes(s) ? (s as AvatarShape) : SHAPE_ALIASES[s];
+  const colorName = c in AVATAR_COLORS ? (c as AvatarColorName) : COLOR_ALIASES[c];
+  return { avatar: { shape: known ?? 'blob' }, ...(colorName ? { color: AVATAR_COLORS[colorName] } : {}) };
+}
 
 /** Shapes that keep their own color whatever color is picked. */
 export const AVATAR_FIXED_COLORS: Partial<Record<AvatarShape, string>> = {

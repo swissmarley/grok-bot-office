@@ -23,18 +23,18 @@ type Phase =
 
 /** Grok Bot avatars for the mock bots (cycled for copies and the showcase). */
 const MOCK_AVATARS: { color: string; avatar: BotAvatar }[] = [
-  { color: AVATAR_COLORS.blue, avatar: { shape: 'drop' } },
+  { color: AVATAR_COLORS.blue, avatar: { shape: 'teardrop' } },
   { color: AVATAR_COLORS.red, avatar: { shape: 'heart' } },
-  { color: AVATAR_COLORS.green, avatar: { shape: 'triangle' } },
-  { color: AVATAR_COLORS.teal, avatar: { shape: 'hexagon' } },
-  { color: AVATAR_COLORS.amber, avatar: { shape: 'clover' } },
-  { color: AVATAR_COLORS.white, avatar: { shape: 'round' } },
-  { color: AVATAR_COLORS.purple, avatar: { shape: 'splat' } },
+  { color: AVATAR_COLORS.green, avatar: { shape: 'wedge' } },
+  { color: AVATAR_COLORS.cyan, avatar: { shape: 'hex' } },
+  { color: AVATAR_COLORS.yellow, avatar: { shape: 'clover' } },
+  { color: AVATAR_COLORS.black, avatar: { shape: 'blob' } },
+  { color: AVATAR_COLORS.violet, avatar: { shape: 'star' } },
   { color: AVATAR_COLORS.orange, avatar: { shape: 'pumpkin' } },
   { color: AVATAR_COLORS.pink, avatar: { shape: 'cloud' } },
   { color: AVATAR_COLORS.brown, avatar: { shape: 'square' } },
   { color: AVATAR_COLORS.gray, avatar: { shape: 'sparkle' } },
-  { color: AVATAR_COLORS.purple, avatar: { shape: 'flower' } },
+  { color: AVATAR_COLORS.violet, avatar: { shape: 'flower' } },
   { color: AVATAR_COLORS.blue, avatar: { shape: 'pill' } },
   { color: AVATAR_COLORS.green, avatar: { shape: 'pentagon' } },
 ];

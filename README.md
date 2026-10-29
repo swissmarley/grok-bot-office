@@ -91,6 +91,7 @@ approvals, store and method names, the Bot computer's sleep phase):
 ```sh
 grokbot launch
 node scripts/probe-grokbot.mjs > grokbot-probe.json
+node scripts/probe-grokbot.mjs --watch 90 > grokbot-watch.json   # make a Bot work meanwhile
 grokbot restore
 ```
 

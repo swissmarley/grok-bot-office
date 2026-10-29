@@ -109,7 +109,7 @@ function pill(h: number): Pt[] {
 
 function build(shape: AvatarShape): AvatarGeometry {
   switch (shape) {
-    case 'round':
+    case 'blob':
       return { outline: fit(polar(() => 1)).pts, eyes: [[0.1, 0.34], [0.5, 0.46]] };
     case 'cloud':
       return {
@@ -154,23 +154,23 @@ function build(shape: AvatarShape): AvatarGeometry {
       });
       return { outline: fit(circles([...lobes, [0, 0, 0.66]])).pts, eyes: [[-0.02, 0.08], [0.36, 0.14]] };
     }
-    case 'drop': {
+    case 'teardrop': {
       // A drop with its soft tip up and to the left.
       const drop = polar((t) => 1 + 0.42 * bump(t, 2.05, 0.55));
       return { outline: fit(chaikin(drop, 2)).pts, eyes: [[0.12, 0.16], [0.48, 0.24]] };
     }
     case 'pill':
       return { outline: fit(rotate(pill(1.4), 0.24)).pts, eyes: [[0.0, 0.16], [0.44, 0.26]] };
-    case 'triangle':
+    case 'wedge':
       return { outline: fit(roundedPolygon(3, -0.3, 2)).pts, eyes: [[-0.1, 0.2], [0.22, 0.24]], eyeTilt: 1.0 };
     case 'pentagon':
       return { outline: fit(roundedPolygon(5, Math.PI / 2 + 0.35, 3)).pts, eyes: [[-0.14, 0.04], [0.22, 0.1]] };
-    case 'splat':
+    case 'star':
       return {
         outline: fit(polar((t) => 0.84 + 0.14 * Math.cos(7 * (t - 0.3)) + 0.03 * Math.cos(2 * t))).pts,
         eyes: [[-0.04, 0.08], [0.32, 0.14]],
       };
-    case 'hexagon':
+    case 'hex':
       return { outline: fit(roundedPolygon(6, 0.28, 4)).pts, eyes: [[-0.16, 0.12], [0.3, 0.18]] };
     case 'pumpkin': {
       const raw = polar((t) => {
@@ -188,7 +188,7 @@ function build(shape: AvatarShape): AvatarGeometry {
 
 const cache = new Map<AvatarShape, AvatarGeometry>();
 
-export function avatarGeometry(shape: AvatarShape = 'round'): AvatarGeometry {
+export function avatarGeometry(shape: AvatarShape = 'blob'): AvatarGeometry {
   let geo = cache.get(shape);
   if (!geo) {
     geo = build(shape);

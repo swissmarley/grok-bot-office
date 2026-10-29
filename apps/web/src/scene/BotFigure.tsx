@@ -138,7 +138,7 @@ export function BotFigure({ bot, reduced }: { bot: Bot; reduced: boolean }) {
     prevStatus.current = bot.status;
   }, [bot.status, reduced, clock, invalidate]);
 
-  const shape = bot.avatar?.shape ?? 'round';
+  const shape = bot.avatar?.shape ?? 'blob';
   const geo = avatarGeometry(shape);
   const bodyColor = useMemo(() => new Color(bot.color), [bot.color]);
   const handColor = useMemo(() => new Color(bot.color).multiplyScalar(0.75), [bot.color]);
