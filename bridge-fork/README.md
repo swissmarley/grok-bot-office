@@ -1,11 +1,12 @@
 # grokbot-bridge fork for Grok Bot Office
 
 `patches/` holds the office's changes to [grokbot-bridge](https://github.com/TheSethRose/grokbot-bridge)
-(MIT), as `git format-patch` output on top of upstream `b905584`. They add
+(MIT), as `git format-patch` output on top of upstream `b905584` (apply them in order). They add
 `src/adapter/grokbot-internals.ts`, the one place for the Grok Bot internals the office uses:
 
 - `grokbot bots --json` also carries each Bot's `avatar`, `main` and `computerPhase`
 - `grokbot open <bot>` shows that Bot's conversation and brings Grok Bot to the front
+- `grokbot office-watch` streams the tool each Bot is using, or its own status line
 - `grokbot internals` reports which pieces the running app still exposes
 
 To make the fork (on the Mac, with `gh` signed in):

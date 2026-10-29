@@ -1,8 +1,8 @@
-From a45fc23bf852ea6e16bb122b6c49363dc4263f88 Mon Sep 17 00:00:00 2001
+From 183e8410c2442aeccd1480ee476ef2f76ae2d334 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 29 Oct 2026 12:42:46 +0000
-Subject: [PATCH] feat: office adapter for avatars, main Bot, computer phase
- and open
+Subject: [PATCH 1/2] feat: office adapter for avatars, main Bot, computer
+ phase and open
 
 Adds src/adapter/grokbot-internals.ts, the one place for the app internals
 Grok Bot Office uses beyond the upstream commands (seen in Grok Bot 0.78.1):
@@ -709,5 +709,5 @@ index 3a73ef1..75e1b05 100644
 +  "exclude": ["src/**/*.test.ts"]
  }
 -- 
-2.43.0
+2.50.1 (Apple Git-155)
 

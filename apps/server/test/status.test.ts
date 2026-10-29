@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { thresholds } from '../src/config.js';
-import { deriveStatus } from '../src/status.js';
+import { deriveStatus, toolFromStatusText } from '../src/status.js';
 import type { BotSignals } from '../src/sources/source.js';
 
 const now = Date.parse('2026-10-28T12:00:00Z');
@@ -25,5 +25,23 @@ describe('deriveStatus', () => {
     ['never replied', {}, 'sleeping'],
   ])('%s', (_name, signals, expected) => {
     expect(deriveStatus({ ...base, ...signals }, now, thresholds)).toBe(expected);
+  });
+});
+
+describe('toolFromStatusText', () => {
+  it.each<[string | null, string | null]>([
+    ['cercando sul web', 'browser'],
+    ['sta cercando la versione di Node', null],
+    ['eseguendo comandi', 'shell'],
+    ['Running the test script', 'shell'],
+    ['scrivendo il codice del parser', 'editor'],
+    ['faccio commit su main', 'editor'],
+    ['leggo le pagine dei prezzi', 'browser'],
+    ['Navigating to the pricing site', 'browser'],
+    ['aggiorno Notion', null],
+    ['', null],
+    [null, null],
+  ])('%j → %s', (text, kind) => {
+    expect(toolFromStatusText(text)).toBe(kind);
   });
 });

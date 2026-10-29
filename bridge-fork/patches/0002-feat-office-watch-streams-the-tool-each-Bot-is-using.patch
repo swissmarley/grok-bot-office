@@ -1,0 +1,1435 @@
+From dee9829c63c8a947fec11fa08cc7abe4d6a668aa Mon Sep 17 00:00:00 2001
+From: Nakya <nakya@Mac-mini-di-Nakya.local>
+Date: Thu, 29 Oct 2026 21:31:09 +0100
+Subject: [PATCH 2/2] feat: office-watch streams the tool each Bot is using, or
+ its own status line
+
+Reads currentActivity on Bot-list rows (Grok Bot 0.78.1): tool names map to
+browser, shell, file or editor; Bots that write their own status line
+(SetStatus) only expose that text, so it is passed on as status.
+
+- office-watch: one JSON line per Bot on start, then one per change
+- bots --json adds tool, toolName and status
+- internals adds toolSteps (unknown while no Bot is working)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ README.md                             |   1 +
+ dist/cli.js                           | 852 ++++++++++++++------------
+ src/adapter/grokbot-internals.test.ts | 117 +++-
+ src/adapter/grokbot-internals.ts      | 130 +++-
+ src/bot.ts                            |   2 +-
+ src/cli.ts                            |  17 +-
+ 6 files changed, 728 insertions(+), 391 deletions(-)
+
+diff --git a/README.md b/README.md
+index 1a1c9ab..70e12c4 100644
+--- a/README.md
++++ b/README.md
+@@ -113,6 +113,7 @@ This fork adds what [Grok Bot Office](https://github.com/swissmarley/grok-bot-of
+ 
+ - `grokbot bots --json` also gives each Bot's `avatar` (`shape`, `color`, `hasPhoto`), whether it is the `main` Bot, and the Bot computer's `computerPhase`. If the adapter can't read them, the plain list still works.
+ - `grokbot open <bot>` shows that Bot's conversation and brings Grok Bot to the front, like clicking it in the sidebar. Focusing the window wakes the Bot's computer, so use it only when the user asks.
++- `grokbot office-watch` streams, as JSON lines, the tool each Bot is using (`browser`, `shell`, `file`, `editor`, or `null` while thinking or idle). Bots that write their own status line ("cercando sul web") expose only that text, passed on as `status`. `bots --json` carries the same `tool`, `toolName` and `status`.
+ - `grokbot internals` reports which of these pieces the current app version still exposes (`--json` for scripts).
+ 
+ `bun test` runs the adapter against a fake renderer shaped like Grok Bot 0.78.1.
+diff --git a/dist/cli.js b/dist/cli.js
+index d2a6893..182fd5d 100755
+--- a/dist/cli.js
++++ b/dist/cli.js
+@@ -1,5 +1,9 @@
+ #!/usr/bin/env node
+ 
++// src/bot.ts
++import { mkdir, open as openFile, readFile, stat } from "node:fs/promises";
++import { basename, extname, join, resolve } from "node:path";
++
+ // src/page.ts
+ function contextValue(test) {
+   return `(() => {
+@@ -38,272 +42,8 @@ var PAGE_AWAKE = `async (id, fn) => {
+   }
+ }`;
+ 
+-// src/adapter/grokbot-internals.ts
+-var NAMES = {
+-  roster: {
+-    store: "roster",
+-    method: "createAgent",
+-    avatarShape: "avatarShape",
+-    avatarColor: "avatarColor",
+-    photo: ["avatarPhoto", "avatarDataUrl"]
+-  },
+-  mainAgent: { store: "mainAgent", method: "ensureDefault" },
+-  selection: { store: "selection", method: "select", current: "readCurrentAgentId" },
+-  desktop: { store: "desktop", method: "focusWindow" }
+-};
+-var N = JSON.stringify(NAMES);
+-var STORES = `
+-  const NAMES = ${N};
+-  const roster = ${store(NAMES.roster.store, NAMES.roster.method)};
+-  const mainAgent = ${store(NAMES.mainAgent.store, NAMES.mainAgent.method)};
+-  const selection = ${store(NAMES.selection.store, NAMES.selection.method)};
+-  const desktop = ${store(NAMES.desktop.store, NAMES.desktop.method)};
+-  const mainId = () => {
+-    try { const s = mainAgent && mainAgent.snapshots.get(); return (s && s.value && s.value.agentId) || null; } catch { return null; }
+-  };
+-  const phase = () => { try { const p = ${BOX_PHASE}; return typeof p === "string" ? p : null; } catch { return null; } };
+-`;
+-var PAGE_OFFICE_INFO = `async () => {${STORES}
+-  if (!roster) throw new Error("Couldn't reach Grok Bot's Bot list.");
+-  const f = NAMES.roster;
+-  const main = mainId();
+-  const rows = roster.snapshots.get().agents.rows.filter((r) => !r.isGroup);
+-  return {
+-    computerPhase: phase(),
+-    profiles: rows.map((r) => ({
+-      id: r.id,
+-      avatar: f.avatarShape in r || f.avatarColor in r
+-        ? { shape: typeof r[f.avatarShape] === "string" ? r[f.avatarShape] : null,
+-            color: typeof r[f.avatarColor] === "string" ? r[f.avatarColor] : null,
+-            hasPhoto: f.photo.some((k) => !!r[k]) }
+-        : null,
+-      main: !!main && r.id === main,
+-    })),
+-  };
+-}`;
+-var PAGE_INTERNALS = `async () => {${STORES}
+-  const rows = roster ? roster.snapshots.get().agents.rows.filter((r) => !r.isGroup) : [];
+-  const m = /GrokBot\\/([\\d.]+)/.exec(navigator.userAgent);
+-  return {
+-    appVersion: m ? m[1] : null,
+-    checks: {
+-      roster: !!roster,
+-      avatars: rows.length > 0 && rows.every((r) => typeof r[NAMES.roster.avatarShape] === "string"),
+-      mainAgent: !!mainId(),
+-      computerPhase: phase() !== null,
+-      selection: !!selection && typeof selection[NAMES.selection.current] === "function",
+-      focusWindow: !!desktop && typeof desktop[NAMES.desktop.method] === "function",
+-    },
+-  };
+-}`;
+-var PAGE_OPEN = `async (id) => {${STORES}
+-  if (!selection) throw new Error("Couldn't reach Grok Bot's conversation selection. This app version may have changed.");
+-  const current = () => { try { return selection[NAMES.selection.current](); } catch { return null; } };
+-  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+-  // The argument shape isn't documented: try the id, then { agentId }.
+-  for (const arg of [id, { agentId: id }]) {
+-    try { await selection[NAMES.selection.method](arg); } catch {}
+-    for (let i = 0; i < 10 && current() !== id; i++) await pause(50);
+-    if (current() === id) break;
+-  }
+-  const selected = current() === id;
+-  let focused = false;
+-  if (desktop) { try { await desktop[NAMES.desktop.method](); focused = true; } catch {} }
+-  return { selected, focused };
+-}`;
+-async function officeInfo(cdp) {
+-  return cdp.call(PAGE_OFFICE_INFO);
+-}
+-async function internalsCheck(cdp) {
+-  return cdp.call(PAGE_INTERNALS);
+-}
+-async function openConversation(cdp, id) {
+-  return cdp.call(PAGE_OPEN, id);
+-}
+-
+-// src/app.ts
+-import { execFile, spawn } from "node:child_process";
+-import { existsSync } from "node:fs";
+-import { homedir } from "node:os";
+-import { join } from "node:path";
+-import { promisify } from "node:util";
+-
+-// src/cdp.ts
+-var DEFAULT_PORT = 9333;
+-function cdpPort() {
+-  const n = Number(process.env.GROKBOT_CDP_PORT || DEFAULT_PORT);
+-  if (!Number.isInteger(n) || n < 1 || n > 65535)
+-    throw new Error(`Invalid GROKBOT_CDP_PORT: ${process.env.GROKBOT_CDP_PORT}`);
+-  return n;
+-}
+-async function listTargets(port = cdpPort()) {
+-  try {
+-    const res = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) });
+-    return await res.json();
+-  } catch {
+-    return null;
+-  }
+-}
+-
+-class NotConnectedError extends Error {
+-  constructor(port) {
+-    super(`Grok Bot isn't reachable on debug port ${port}. Run \`grokbot launch\` first.`);
+-    this.name = "NotConnectedError";
+-  }
+-}
+-
+-class CDP {
+-  ws;
+-  nextId = 0;
+-  pending = new Map;
+-  bindings = new Map;
+-  constructor(ws) {
+-    this.ws = ws;
+-    ws.addEventListener("message", (ev) => {
+-      const msg = JSON.parse(String(ev.data));
+-      if (msg.method === "Runtime.bindingCalled")
+-        return this.bindings.get(msg.params.name)?.(msg.params.payload);
+-      const p = msg.id ? this.pending.get(msg.id) : undefined;
+-      if (!p)
+-        return;
+-      this.pending.delete(msg.id);
+-      if (msg.error)
+-        p.reject(new Error(msg.error.message));
+-      else
+-        p.resolve(msg.result);
+-    });
+-    ws.addEventListener("close", () => {
+-      for (const p of this.pending.values())
+-        p.reject(new Error("CDP connection closed"));
+-      this.pending.clear();
+-    });
+-  }
+-  static async connect(port = cdpPort()) {
+-    const targets = await listTargets(port);
+-    if (!targets)
+-      throw new NotConnectedError(port);
+-    const page = targets.find((t) => t.type === "page" && /app\.asar|\/renderer\/index\.html/.test(t.url));
+-    if (!page)
+-      throw new Error(`Debug port ${port} is open, but no Grok Bot window was found on it.`);
+-    const ws = new WebSocket(page.webSocketDebuggerUrl);
+-    await new Promise((resolve, reject) => {
+-      ws.addEventListener("open", () => resolve(), { once: true });
+-      ws.addEventListener("error", () => reject(new Error("Could not open the CDP websocket")), { once: true });
+-    });
+-    return new CDP(ws);
+-  }
+-  send(method, params = {}) {
+-    const id = ++this.nextId;
+-    this.ws.send(JSON.stringify({ id, method, params }));
+-    return new Promise((resolve, reject) => {
+-      this.pending.set(id, { resolve, reject });
+-    });
+-  }
+-  async eval(expression) {
+-    const r = await this.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+-    if (r.exceptionDetails)
+-      throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
+-    return r.result.value;
+-  }
+-  call(fn, ...args) {
+-    return this.eval(`(${fn})(...${JSON.stringify(args)})`);
+-  }
+-  async bind(fn) {
+-    const name = `__grokbot_${process.pid}_${this.bindings.size}`;
+-    this.bindings.set(name, fn);
+-    await this.send("Runtime.addBinding", { name });
+-    return name;
+-  }
+-  close() {
+-    this.ws.close();
+-  }
+-}
+-
+-// src/app.ts
+-var run = promisify(execFile);
+-var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+-var PROCESS_NAME = "Grok Bot";
+-function appCandidates() {
+-  if (process.env.GROKBOT_APP)
+-    return [process.env.GROKBOT_APP];
+-  switch (process.platform) {
+-    case "darwin":
+-      return ["/Applications/Grok Bot.app", join(homedir(), "Applications/Grok Bot.app")];
+-    case "win32": {
+-      const local = process.env.LOCALAPPDATA ?? join(homedir(), "AppData/Local");
+-      return [join(local, "Programs/Grok Bot/Grok Bot.exe"), join(process.env.ProgramFiles ?? "C:/Program Files", "Grok Bot/Grok Bot.exe")];
+-    }
+-    default:
+-      return ["/opt/Grok Bot/grok-bot", "/usr/bin/grok-bot", "/usr/local/bin/grok-bot"];
+-  }
+-}
+-function findApp() {
+-  const found = appCandidates().find((p) => existsSync(p));
+-  if (!found)
+-    throw new Error(`Grok Bot app not found. Looked in:
+-  ${appCandidates().join(`
+-  `)}
+-Set GROKBOT_APP to its path.`);
+-  return found;
+-}
+-async function isRunning() {
+-  try {
+-    if (process.platform === "win32") {
+-      const { stdout } = await run("tasklist", ["/FI", `IMAGENAME eq ${PROCESS_NAME}.exe`, "/NH"]);
+-      return stdout.includes(PROCESS_NAME);
+-    }
+-    const pattern = process.platform === "darwin" ? "Grok Bot.app/Contents/MacOS/Grok Bot" : "grok-bot|Grok Bot";
+-    await run("pgrep", ["-f", pattern]);
+-    return true;
+-  } catch {
+-    return false;
+-  }
+-}
+-async function quit() {
+-  if (!await isRunning())
+-    return;
+-  if (process.platform === "darwin")
+-    await run("osascript", ["-e", `tell application "${PROCESS_NAME}" to quit`]).catch(() => {});
+-  else if (process.platform === "win32")
+-    await run("taskkill", ["/IM", `${PROCESS_NAME}.exe`]).catch(() => {});
+-  else
+-    await run("pkill", ["-TERM", "-f", "grok-bot|Grok Bot"]).catch(() => {});
+-  for (let i = 0;i < 40 && await isRunning(); i++)
+-    await sleep(250);
+-  if (await isRunning())
+-    throw new Error("Grok Bot didn't quit. Quit it yourself, then rerun.");
+-}
+-function start(app, args) {
+-  if (process.platform === "darwin") {
+-    spawn("open", ["-a", app, ...args.length ? ["--args", ...args] : []], { detached: true, stdio: "ignore" }).unref();
+-  } else {
+-    spawn(app, args, { detached: true, stdio: "ignore" }).unref();
+-  }
+-}
+-async function launch() {
+-  const port = cdpPort();
+-  if (await listTargets(port))
+-    return { port, restarted: false };
+-  const app = findApp();
+-  await quit();
+-  start(app, [`--remote-debugging-port=${port}`, "--remote-debugging-address=127.0.0.1"]);
+-  for (let i = 0;i < 80; i++) {
+-    if (await listTargets(port))
+-      return { port, restarted: true };
+-    await sleep(250);
+-  }
+-  throw new Error(`Grok Bot started but debug port ${port} never opened.`);
+-}
+-async function restore() {
+-  const app = findApp();
+-  await quit();
+-  start(app, []);
+-}
+-
+ // src/bot.ts
+-import { mkdir, open as openFile, readFile, stat } from "node:fs/promises";
+-import { basename, extname, join as join2, resolve } from "node:path";
+-var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
++var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+ var LIB = `
+   const roster = ${store("roster", "createAgent")};
+   const transcript = ${store("transcript", "snapshotsFor")};
+@@ -561,117 +301,464 @@ async function loadFiles(paths) {
+     return { name, type, data: (await readFile(p)).toString("base64") };
+   }));
+ }
+-async function send(cdp, botQuery, text, files = []) {
+-  if (!text.trim() && !files.length)
+-    throw new Error("Message is empty.");
+-  const bot = await findBot(cdp, botQuery);
+-  const key = await cdp.call(PAGE_SEND, bot.id, text.trim(), await loadFiles(files));
+-  return { bot: bot.name, key };
++async function send(cdp, botQuery, text, files = []) {
++  if (!text.trim() && !files.length)
++    throw new Error("Message is empty.");
++  const bot = await findBot(cdp, botQuery);
++  const key = await cdp.call(PAGE_SEND, bot.id, text.trim(), await loadFiles(files));
++  return { bot: bot.name, key };
++}
++async function withHeartbeat(cdp, fn) {
++  const beat = `beat_${process.pid}_${Date.now()}`;
++  const name = JSON.stringify(beat);
++  const touch = () => cdp.eval(`{ const g = (window.__grokbot = window.__grokbot || {}); g[${name}] = Date.now(); g.ticks?.[${name}]?.(); }`).catch(() => {});
++  await touch();
++  const iv = setInterval(touch, 1000);
++  try {
++    return await fn(beat);
++  } finally {
++    clearInterval(iv);
++  }
++}
++async function wait(cdp, botQuery, opts = {}) {
++  const bot = await findBot(cdp, botQuery);
++  const sink = opts.onUpdate ? await cdp.bind((p) => opts.onUpdate?.(JSON.parse(p))) : null;
++  const r = await withHeartbeat(cdp, (beat) => cdp.call(PAGE_WAIT, bot.id, opts.since ?? null, opts.timeoutMs ?? 1800000, opts.settleMs ?? 8000, beat, sink));
++  return { bot: bot.name, ...r };
++}
++async function ask(cdp, botQuery, text, opts = {}) {
++  const t0 = Date.now();
++  const sent = await send(cdp, botQuery, text, opts.files);
++  const r = await wait(cdp, sent.bot, {
++    ...opts,
++    since: sent.key,
++    timeoutMs: Math.max(1000, (opts.timeoutMs ?? 300000) - (Date.now() - t0))
++  });
++  return { ...r, key: sent.key, elapsedMs: Date.now() - t0 };
++}
++async function watch(cdp, botQuery, onEvent, settleMs = 8000) {
++  const only = botQuery ? (await findBot(cdp, botQuery)).id : null;
++  await cdp.send("Runtime.enable");
++  const sink = await cdp.bind((p) => onEvent(JSON.parse(p)));
++  await withHeartbeat(cdp, (beat) => cdp.call(PAGE_WATCH, only, settleMs, beat, sink));
++}
++async function stop(cdp, botQuery) {
++  const bot = await findBot(cdp, botQuery);
++  return { bot: bot.name, stopped: await cdp.call(PAGE_STOP, bot.id) };
++}
++var MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
++async function writeNew(dir, name, data) {
++  await mkdir(dir, { recursive: true });
++  const ext = extname(name);
++  const stem = name.slice(0, name.length - ext.length) || "file";
++  for (let n = 0;; n++) {
++    const target = join(dir, n ? `${stem} (${n})${ext}` : name);
++    const fh = await openFile(target, "wx").catch((e) => {
++      if (e.code === "EEXIST")
++        return null;
++      throw e;
++    });
++    if (!fh)
++      continue;
++    try {
++      await fh.writeFile(data);
++    } finally {
++      await fh.close();
++    }
++    return target;
++  }
++}
++async function download(cdp, botQuery, keys, outDir = ".") {
++  const { bot, messages } = await read(cdp, botQuery, { limit: 1000 });
++  const id = (await findBot(cdp, bot)).id;
++  const withFiles = messages.filter((m) => m.file);
++  const picked = keys.length ? keys.map((k) => {
++    const m = messages.find((x) => x.key === k);
++    if (!m)
++      throw new Error(`No message with key ${k} in ${bot}'s conversation.`);
++    if (!m.file)
++      throw new Error(`Message ${k} has no file.`);
++    return m;
++  }) : withFiles.filter((m) => m.role === "assistant").slice(-1);
++  if (!picked.length)
++    throw new Error(`${bot} hasn't sent any files.`);
++  const files = [];
++  for (const m of picked) {
++    const file = m.file;
++    const data = Buffer.from(await cdp.call(PAGE_DOWNLOAD, id, file.path, MAX_DOWNLOAD_BYTES), "base64");
++    const savedTo = await writeNew(resolve(outDir), basename(file.name), data);
++    files.push({ name: file.name, from: file.path, savedTo, bytes: data.length });
++  }
++  return { bot, files };
++}
++async function usage(cdp) {
++  const get = () => cdp.call(`async () => { const m = window.desktop?.main; return m?.getCursorUsageSummary ? await m.getCursorUsageSummary() : null; }`);
++  const s = await get().catch(async (e) => {
++    await sleep(2000);
++    return get().catch(() => {
++      throw new Error(`Couldn't read usage from Grok Bot: ${e.message}`);
++    });
++  });
++  if (!s || typeof s.sandUsagePercent !== "number")
++    throw new Error("Couldn't read usage. This Grok Bot version may not support it.");
++  return {
++    percentUsed: Math.round(s.sandUsagePercent * 100) / 100,
++    resetsAt: s.sandUsageResetTimestampMs ? new Date(s.sandUsageResetTimestampMs).toISOString() : null,
++    plan: s.grokPlanLabel ?? null,
++    hasAvailableUsage: s.hasAvailableUsage !== false,
++    onDemand: s.onDemand ? { enabled: !!s.onDemandSettings?.enabled, usedCents: s.onDemand.usedCents ?? 0, limitCents: s.onDemand.limitCents ?? null } : null
++  };
++}
++async function status(cdp) {
++  const bots = await listBots(cdp);
++  return { bots, busy: bots.some((b) => b.running), usage: await usage(cdp).catch(() => null) };
++}
++
++// src/adapter/grokbot-internals.ts
++var NAMES = {
++  roster: {
++    store: "roster",
++    method: "createAgent",
++    avatarShape: "avatarShape",
++    avatarColor: "avatarColor",
++    photo: ["avatarPhoto", "avatarDataUrl"]
++  },
++  activity: { field: "currentActivity", kind: "kind", tool: "tool", detail: "detail", thinking: "thinking", statusTool: "SetStatus" },
++  tools: {
++    browser: [
++      "WebSearch",
++      "WebFetch",
++      "PlacesSearch",
++      "WeatherForecast",
++      "RestaurantSearch",
++      "FlightSearch",
++      "FlightDetails",
++      "ProductSearch",
++      "BrowserSecureFill",
++      "RemapUserFormTargets",
++      "remap_user_form_targets"
++    ],
++    browserPrefix: "browser_",
++    shell: ["Shell", "BoxShell", "MachineShell", "AwaitShell", "Await"],
++    file: [
++      "Read",
++      "BoxRead",
++      "CopyToBox",
++      "CopyFromBox",
++      "CopyBotFile",
++      "ReadDocument",
++      "WriteDocument",
++      "WriteDocumentAsset",
++      "EditCanvas",
++      "WriteCanvasAsset"
++    ],
++    editor: ["CloudAgent"]
++  },
++  mainAgent: { store: "mainAgent", method: "ensureDefault" },
++  selection: { store: "selection", method: "select", current: "readCurrentAgentId" },
++  desktop: { store: "desktop", method: "focusWindow" }
++};
++var N = JSON.stringify(NAMES);
++var STORES = `
++  const NAMES = ${N};
++  const roster = ${store(NAMES.roster.store, NAMES.roster.method)};
++  const mainAgent = ${store(NAMES.mainAgent.store, NAMES.mainAgent.method)};
++  const selection = ${store(NAMES.selection.store, NAMES.selection.method)};
++  const desktop = ${store(NAMES.desktop.store, NAMES.desktop.method)};
++  const mainId = () => {
++    try { const s = mainAgent && mainAgent.snapshots.get(); return (s && s.value && s.value.agentId) || null; } catch { return null; }
++  };
++  const phase = () => { try { const p = ${BOX_PHASE}; return typeof p === "string" ? p : null; } catch { return null; } };
++  const working = (r) => r.awaitingUserResponse == null && !!(r.isRunning || r.isRunningTurn || r.isComposingMessage);
++  const toolOf = (r) => {
++    const a = NAMES.activity, t = NAMES.tools;
++    const act = working(r) ? r[a.field] : null;
++    const none = { tool: null, name: null, status: null };
++    if (!act || typeof act !== "object" || act[a.kind] === a.thinking) return none;
++    const name = typeof act[a.tool] === "string" && act[a.tool] ? act[a.tool] : null;
++    if (!name) return none;
++    const drafting = typeof act[a.detail] === "string" && act[a.detail].trim() !== "";
++    if (name === a.statusTool) return { tool: null, name, status: drafting ? act[a.detail].trim().slice(0, 120) : null };
++    const tool = t.browser.includes(name) || name.startsWith(t.browserPrefix) ? "browser"
++      : t.shell.includes(name) ? (drafting && name !== "AwaitShell" && name !== "Await" ? "file" : "shell")
++      : t.file.includes(name) ? "file"
++      : t.editor.includes(name) ? "editor"
++      : null;
++    return { tool, name, status: null };
++  };
++`;
++var PAGE_OFFICE_INFO = `async () => {${STORES}
++  if (!roster) throw new Error("Couldn't reach Grok Bot's Bot list.");
++  const f = NAMES.roster;
++  const main = mainId();
++  const rows = roster.snapshots.get().agents.rows.filter((r) => !r.isGroup);
++  return {
++    computerPhase: phase(),
++    profiles: rows.map((r) => ({
++      id: r.id,
++      avatar: f.avatarShape in r || f.avatarColor in r
++        ? { shape: typeof r[f.avatarShape] === "string" ? r[f.avatarShape] : null,
++            color: typeof r[f.avatarColor] === "string" ? r[f.avatarColor] : null,
++            hasPhoto: f.photo.some((k) => !!r[k]) }
++        : null,
++      main: !!main && r.id === main,
++      ...(() => { const t = toolOf(r); return { tool: t.tool, toolName: t.name, status: t.status }; })(),
++    })),
++  };
++}`;
++var PAGE_INTERNALS = `async () => {${STORES}
++  const rows = roster ? roster.snapshots.get().agents.rows.filter((r) => !r.isGroup) : [];
++  const m = /GrokBot\\/([\\d.]+)/.exec(navigator.userAgent);
++  return {
++    appVersion: m ? m[1] : null,
++    checks: {
++      roster: !!roster,
++      avatars: rows.length > 0 && rows.every((r) => typeof r[NAMES.roster.avatarShape] === "string"),
++      mainAgent: !!mainId(),
++      computerPhase: phase() !== null,
++      selection: !!selection && typeof selection[NAMES.selection.current] === "function",
++      focusWindow: !!desktop && typeof desktop[NAMES.desktop.method] === "function",
++      toolSteps: rows.some(working) ? rows.filter(working).some((r) => NAMES.activity.field in r) : null,
++    },
++  };
++}`;
++var PAGE_OPEN = `async (id) => {${STORES}
++  if (!selection) throw new Error("Couldn't reach Grok Bot's conversation selection. This app version may have changed.");
++  const current = () => { try { return selection[NAMES.selection.current](); } catch { return null; } };
++  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
++  // The argument shape isn't documented: try the id, then { agentId }.
++  for (const arg of [id, { agentId: id }]) {
++    try { await selection[NAMES.selection.method](arg); } catch {}
++    for (let i = 0; i < 10 && current() !== id; i++) await pause(50);
++    if (current() === id) break;
++  }
++  const selected = current() === id;
++  let focused = false;
++  if (desktop) { try { await desktop[NAMES.desktop.method](); focused = true; } catch {} }
++  return { selected, focused };
++}`;
++var PAGE_TOOL_WATCH = `async (beat, sink) => {${STORES}
++  if (!roster) throw new Error("Couldn't reach Grok Bot's Bot list.");
++  const g = (window.__grokbot = window.__grokbot || {});
++  const alive = () => Date.now() - (g[beat] || Date.now()) < 45000;
++  const emit = (ev) => { try { if (typeof window[sink] === "function") window[sink](JSON.stringify(ev)); } catch {} };
++  const last = new Map();
++  let finish;
++  const finished = new Promise((resolve) => { finish = resolve; });
++  const tick = () => {
++    if (!alive()) return finish();
++    for (const r of roster.snapshots.get().agents.rows) {
++      if (r.isGroup) continue;
++      const t = toolOf(r), key = JSON.stringify(t);
++      if (last.get(r.id) === key) continue;
++      last.set(r.id, key);
++      emit({ type: "tool", bot: r.name, id: r.id, ...t, at: new Date().toISOString() });
++    }
++  };
++  const unsub = roster.snapshots.subscribe(tick);
++  g.ticks = g.ticks || {};
++  g.ticks[beat] = tick;
++  tick();
++  // Heartbeats tick every second; this catches the last one going missing.
++  const iv = setInterval(() => { if (!alive()) finish(); }, 5000);
++  await finished;
++  clearInterval(iv);
++  if (typeof unsub === "function") unsub();
++  delete g.ticks[beat];
++  delete g[beat];
++}`;
++async function officeInfo(cdp) {
++  return cdp.call(PAGE_OFFICE_INFO);
++}
++async function internalsCheck(cdp) {
++  return cdp.call(PAGE_INTERNALS);
++}
++async function officeWatch(cdp, onEvent) {
++  await cdp.send("Runtime.enable");
++  const sink = await cdp.bind((p) => onEvent(JSON.parse(p)));
++  await withHeartbeat(cdp, (beat) => cdp.call(PAGE_TOOL_WATCH, beat, sink));
+ }
+-async function withHeartbeat(cdp, fn) {
+-  const beat = `beat_${process.pid}_${Date.now()}`;
+-  const name = JSON.stringify(beat);
+-  const touch = () => cdp.eval(`{ const g = (window.__grokbot = window.__grokbot || {}); g[${name}] = Date.now(); g.ticks?.[${name}]?.(); }`).catch(() => {});
+-  await touch();
+-  const iv = setInterval(touch, 1000);
++async function openConversation(cdp, id) {
++  return cdp.call(PAGE_OPEN, id);
++}
++
++// src/app.ts
++import { execFile, spawn } from "node:child_process";
++import { existsSync } from "node:fs";
++import { homedir } from "node:os";
++import { join as join2 } from "node:path";
++import { promisify } from "node:util";
++
++// src/cdp.ts
++var DEFAULT_PORT = 9333;
++function cdpPort() {
++  const n = Number(process.env.GROKBOT_CDP_PORT || DEFAULT_PORT);
++  if (!Number.isInteger(n) || n < 1 || n > 65535)
++    throw new Error(`Invalid GROKBOT_CDP_PORT: ${process.env.GROKBOT_CDP_PORT}`);
++  return n;
++}
++async function listTargets(port = cdpPort()) {
+   try {
+-    return await fn(beat);
+-  } finally {
+-    clearInterval(iv);
++    const res = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) });
++    return await res.json();
++  } catch {
++    return null;
+   }
+ }
+-async function wait(cdp, botQuery, opts = {}) {
+-  const bot = await findBot(cdp, botQuery);
+-  const sink = opts.onUpdate ? await cdp.bind((p) => opts.onUpdate?.(JSON.parse(p))) : null;
+-  const r = await withHeartbeat(cdp, (beat) => cdp.call(PAGE_WAIT, bot.id, opts.since ?? null, opts.timeoutMs ?? 1800000, opts.settleMs ?? 8000, beat, sink));
+-  return { bot: bot.name, ...r };
++
++class NotConnectedError extends Error {
++  constructor(port) {
++    super(`Grok Bot isn't reachable on debug port ${port}. Run \`grokbot launch\` first.`);
++    this.name = "NotConnectedError";
++  }
+ }
+-async function ask(cdp, botQuery, text, opts = {}) {
+-  const t0 = Date.now();
+-  const sent = await send(cdp, botQuery, text, opts.files);
+-  const r = await wait(cdp, sent.bot, {
+-    ...opts,
+-    since: sent.key,
+-    timeoutMs: Math.max(1000, (opts.timeoutMs ?? 300000) - (Date.now() - t0))
+-  });
+-  return { ...r, key: sent.key, elapsedMs: Date.now() - t0 };
++
++class CDP {
++  ws;
++  nextId = 0;
++  pending = new Map;
++  bindings = new Map;
++  constructor(ws) {
++    this.ws = ws;
++    ws.addEventListener("message", (ev) => {
++      const msg = JSON.parse(String(ev.data));
++      if (msg.method === "Runtime.bindingCalled")
++        return this.bindings.get(msg.params.name)?.(msg.params.payload);
++      const p = msg.id ? this.pending.get(msg.id) : undefined;
++      if (!p)
++        return;
++      this.pending.delete(msg.id);
++      if (msg.error)
++        p.reject(new Error(msg.error.message));
++      else
++        p.resolve(msg.result);
++    });
++    ws.addEventListener("close", () => {
++      for (const p of this.pending.values())
++        p.reject(new Error("CDP connection closed"));
++      this.pending.clear();
++    });
++  }
++  static async connect(port = cdpPort()) {
++    const targets = await listTargets(port);
++    if (!targets)
++      throw new NotConnectedError(port);
++    const page2 = targets.find((t) => t.type === "page" && /app\.asar|\/renderer\/index\.html/.test(t.url));
++    if (!page2)
++      throw new Error(`Debug port ${port} is open, but no Grok Bot window was found on it.`);
++    const ws = new WebSocket(page2.webSocketDebuggerUrl);
++    await new Promise((resolve2, reject) => {
++      ws.addEventListener("open", () => resolve2(), { once: true });
++      ws.addEventListener("error", () => reject(new Error("Could not open the CDP websocket")), { once: true });
++    });
++    return new CDP(ws);
++  }
++  send(method, params = {}) {
++    const id = ++this.nextId;
++    this.ws.send(JSON.stringify({ id, method, params }));
++    return new Promise((resolve2, reject) => {
++      this.pending.set(id, { resolve: resolve2, reject });
++    });
++  }
++  async eval(expression) {
++    const r = await this.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
++    if (r.exceptionDetails)
++      throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
++    return r.result.value;
++  }
++  call(fn, ...args) {
++    return this.eval(`(${fn})(...${JSON.stringify(args)})`);
++  }
++  async bind(fn) {
++    const name = `__grokbot_${process.pid}_${this.bindings.size}`;
++    this.bindings.set(name, fn);
++    await this.send("Runtime.addBinding", { name });
++    return name;
++  }
++  close() {
++    this.ws.close();
++  }
+ }
+-async function watch(cdp, botQuery, onEvent, settleMs = 8000) {
+-  const only = botQuery ? (await findBot(cdp, botQuery)).id : null;
+-  await cdp.send("Runtime.enable");
+-  const sink = await cdp.bind((p) => onEvent(JSON.parse(p)));
+-  await withHeartbeat(cdp, (beat) => cdp.call(PAGE_WATCH, only, settleMs, beat, sink));
++
++// src/app.ts
++var run = promisify(execFile);
++var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
++var PROCESS_NAME = "Grok Bot";
++function appCandidates() {
++  if (process.env.GROKBOT_APP)
++    return [process.env.GROKBOT_APP];
++  switch (process.platform) {
++    case "darwin":
++      return ["/Applications/Grok Bot.app", join2(homedir(), "Applications/Grok Bot.app")];
++    case "win32": {
++      const local = process.env.LOCALAPPDATA ?? join2(homedir(), "AppData/Local");
++      return [join2(local, "Programs/Grok Bot/Grok Bot.exe"), join2(process.env.ProgramFiles ?? "C:/Program Files", "Grok Bot/Grok Bot.exe")];
++    }
++    default:
++      return ["/opt/Grok Bot/grok-bot", "/usr/bin/grok-bot", "/usr/local/bin/grok-bot"];
++  }
+ }
+-async function stop(cdp, botQuery) {
+-  const bot = await findBot(cdp, botQuery);
+-  return { bot: bot.name, stopped: await cdp.call(PAGE_STOP, bot.id) };
++function findApp() {
++  const found = appCandidates().find((p) => existsSync(p));
++  if (!found)
++    throw new Error(`Grok Bot app not found. Looked in:
++  ${appCandidates().join(`
++  `)}
++Set GROKBOT_APP to its path.`);
++  return found;
+ }
+-var MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
+-async function writeNew(dir, name, data) {
+-  await mkdir(dir, { recursive: true });
+-  const ext = extname(name);
+-  const stem = name.slice(0, name.length - ext.length) || "file";
+-  for (let n = 0;; n++) {
+-    const target = join2(dir, n ? `${stem} (${n})${ext}` : name);
+-    const fh = await openFile(target, "wx").catch((e) => {
+-      if (e.code === "EEXIST")
+-        return null;
+-      throw e;
+-    });
+-    if (!fh)
+-      continue;
+-    try {
+-      await fh.writeFile(data);
+-    } finally {
+-      await fh.close();
++async function isRunning() {
++  try {
++    if (process.platform === "win32") {
++      const { stdout } = await run("tasklist", ["/FI", `IMAGENAME eq ${PROCESS_NAME}.exe`, "/NH"]);
++      return stdout.includes(PROCESS_NAME);
+     }
+-    return target;
++    const pattern = process.platform === "darwin" ? "Grok Bot.app/Contents/MacOS/Grok Bot" : "grok-bot|Grok Bot";
++    await run("pgrep", ["-f", pattern]);
++    return true;
++  } catch {
++    return false;
+   }
+ }
+-async function download(cdp, botQuery, keys, outDir = ".") {
+-  const { bot, messages } = await read(cdp, botQuery, { limit: 1000 });
+-  const id = (await findBot(cdp, bot)).id;
+-  const withFiles = messages.filter((m) => m.file);
+-  const picked = keys.length ? keys.map((k) => {
+-    const m = messages.find((x) => x.key === k);
+-    if (!m)
+-      throw new Error(`No message with key ${k} in ${bot}'s conversation.`);
+-    if (!m.file)
+-      throw new Error(`Message ${k} has no file.`);
+-    return m;
+-  }) : withFiles.filter((m) => m.role === "assistant").slice(-1);
+-  if (!picked.length)
+-    throw new Error(`${bot} hasn't sent any files.`);
+-  const files = [];
+-  for (const m of picked) {
+-    const file = m.file;
+-    const data = Buffer.from(await cdp.call(PAGE_DOWNLOAD, id, file.path, MAX_DOWNLOAD_BYTES), "base64");
+-    const savedTo = await writeNew(resolve(outDir), basename(file.name), data);
+-    files.push({ name: file.name, from: file.path, savedTo, bytes: data.length });
++async function quit() {
++  if (!await isRunning())
++    return;
++  if (process.platform === "darwin")
++    await run("osascript", ["-e", `tell application "${PROCESS_NAME}" to quit`]).catch(() => {});
++  else if (process.platform === "win32")
++    await run("taskkill", ["/IM", `${PROCESS_NAME}.exe`]).catch(() => {});
++  else
++    await run("pkill", ["-TERM", "-f", "grok-bot|Grok Bot"]).catch(() => {});
++  for (let i = 0;i < 40 && await isRunning(); i++)
++    await sleep2(250);
++  if (await isRunning())
++    throw new Error("Grok Bot didn't quit. Quit it yourself, then rerun.");
++}
++function start(app, args) {
++  if (process.platform === "darwin") {
++    spawn("open", ["-a", app, ...args.length ? ["--args", ...args] : []], { detached: true, stdio: "ignore" }).unref();
++  } else {
++    spawn(app, args, { detached: true, stdio: "ignore" }).unref();
+   }
+-  return { bot, files };
+ }
+-async function usage(cdp) {
+-  const get = () => cdp.call(`async () => { const m = window.desktop?.main; return m?.getCursorUsageSummary ? await m.getCursorUsageSummary() : null; }`);
+-  const s = await get().catch(async (e) => {
+-    await sleep2(2000);
+-    return get().catch(() => {
+-      throw new Error(`Couldn't read usage from Grok Bot: ${e.message}`);
+-    });
+-  });
+-  if (!s || typeof s.sandUsagePercent !== "number")
+-    throw new Error("Couldn't read usage. This Grok Bot version may not support it.");
+-  return {
+-    percentUsed: Math.round(s.sandUsagePercent * 100) / 100,
+-    resetsAt: s.sandUsageResetTimestampMs ? new Date(s.sandUsageResetTimestampMs).toISOString() : null,
+-    plan: s.grokPlanLabel ?? null,
+-    hasAvailableUsage: s.hasAvailableUsage !== false,
+-    onDemand: s.onDemand ? { enabled: !!s.onDemandSettings?.enabled, usedCents: s.onDemand.usedCents ?? 0, limitCents: s.onDemand.limitCents ?? null } : null
+-  };
++async function launch() {
++  const port = cdpPort();
++  if (await listTargets(port))
++    return { port, restarted: false };
++  const app = findApp();
++  await quit();
++  start(app, [`--remote-debugging-port=${port}`, "--remote-debugging-address=127.0.0.1"]);
++  for (let i = 0;i < 80; i++) {
++    if (await listTargets(port))
++      return { port, restarted: true };
++    await sleep2(250);
++  }
++  throw new Error(`Grok Bot started but debug port ${port} never opened.`);
+ }
+-async function status(cdp) {
+-  const bots = await listBots(cdp);
+-  return { bots, busy: bots.some((b) => b.running), usage: await usage(cdp).catch(() => null) };
++async function restore() {
++  const app = findApp();
++  await quit();
++  start(app, []);
+ }
+ 
+ // src/mcp.ts
+@@ -799,10 +886,10 @@ var PAGE_ROUTINES = `async (op, id, arg) => {
+ function asleepMessage(bot, phase) {
+   return `${bot}'s computer is asleep (Grok Bot phase "${phase}"), so Grok Bot can't show its routines right now. It wakes the next time you open Grok Bot. Routine changes still work: they go through the Bot.`;
+ }
+-async function pageOp(cdp, op, bot, arg) {
+-  const r = await cdp.call(PAGE_ROUTINES, op, bot.id, arg ?? null);
++async function pageOp(cdp, op2, bot, arg) {
++  const r = await cdp.call(PAGE_ROUTINES, op2, bot.id, arg ?? null);
+   if (r.asleep !== undefined) {
+-    throw new Error(op === "run" ? `${bot.name}'s computer is asleep, and Bots can't start a routine on demand. It will run on its schedule, or run this again after you next open Grok Bot.` : asleepMessage(bot.name, r.asleep));
++    throw new Error(op2 === "run" ? `${bot.name}'s computer is asleep, and Bots can't start a routine on demand. It will run on its schedule, or run this again after you next open Grok Bot.` : asleepMessage(bot.name, r.asleep));
+   }
+   if (r.error !== undefined)
+     throw new Error(r.error);
+@@ -1117,11 +1204,11 @@ async function callTool(name, args) {
+     case "grokbot_create_bot":
+       return withApp((c) => createBot(c, { name: str("name"), description: opt("description") }));
+     case "grokbot_update_bot": {
+-      const name = opt("name");
++      const name2 = opt("name");
+       const description = opt("description");
+-      if (name === undefined && description === undefined)
++      if (name2 === undefined && description === undefined)
+         throw new Error('Pass "name" or "description" to change.');
+-      return withApp((c) => updateBot(c, str("bot"), { name, description }));
++      return withApp((c) => updateBot(c, str("bot"), { name: name2, description }));
+     }
+     case "grokbot_delete_bot":
+       if (str("confirm") !== str("bot"))
+@@ -1198,8 +1285,9 @@ Usage:
+   grokbot routines enable|disable <bot> <routine>   Ask the Bot to turn a routine on or off
+   grokbot routines remove <bot> <routine> --yes   Ask the Bot to delete a routine (exact name or id)
+   grokbot routines run <bot> <routine>   Run a routine now (needs its computer awake)
+-  grokbot bots                      List your Bots and what each is doing (--json adds avatar, main and computerPhase)
++  grokbot bots                      List your Bots and what each is doing (--json adds avatar, main, tool and computerPhase)
+   grokbot open <bot>                Show the Bot's conversation and bring Grok Bot to the front
++  grokbot office-watch              Stream the tool each Bot is using (browser, shell, file, editor) or its status line, as JSON lines
+   grokbot internals                 Check which app internals the office adapter can reach
+   grokbot create <name>             Create a Bot (--description <text>)
+   grokbot update <bot>              Rename a Bot or change its description (--name, --description)
+@@ -1377,6 +1465,9 @@ ${formatUsage(s.usage)}` : ""}`);
+           ...b,
+           avatar: byId.get(b.id)?.avatar ?? null,
+           main: byId.get(b.id)?.main ?? false,
++          tool: byId.get(b.id)?.tool ?? null,
++          toolName: byId.get(b.id)?.toolName ?? null,
++          status: byId.get(b.id)?.status ?? null,
+           computerPhase: extra.computerPhase
+         }));
+         return out(merged, () => "");
+@@ -1476,9 +1567,9 @@ ${formatUsage(s.usage)}` : ""}`);
+       if (!bot)
+         throw new Error("Usage: grokbot routines <bot> | routines add|run|enable|disable|remove <bot> ...");
+       if (action === "list") {
+-        const r = await withApp2((c) => listRoutines(c, bot));
+-        return out(r, () => r.routines.length ? r.routines.map(formatRoutine).join(`
+-`) : `${r.bot} has no routines.`);
++        const r2 = await withApp2((c) => listRoutines(c, bot));
++        return out(r2, () => r2.routines.length ? r2.routines.map(formatRoutine).join(`
++`) : `${r2.bot} has no routines.`);
+       }
+       const timing = {
+         timeoutMs: positiveNumber(flags.timeout, "timeout", 300) * 1000,
+@@ -1491,8 +1582,8 @@ ${formatUsage(s.usage)}` : ""}`);
+         const prompt = str(flags.prompt) === "-" ? await readMessage(["-"]) : str(flags.prompt);
+         if (!name || !schedule || !prompt)
+           throw new Error('Usage: grokbot routines add <bot> --name <name> --schedule "<cron>" --prompt <text> [--disabled]');
+-        const r = await withApp2((c) => changeRoutine(c, bot, "add", { name, schedule, prompt, enabled: !flags.disabled }, timing));
+-        return printChange(r, "Added", !!flags.json);
++        const r2 = await withApp2((c) => changeRoutine(c, bot, "add", { name, schedule, prompt, enabled: !flags.disabled }, timing));
++        return printChange(r2, "Added", !!flags.json);
+       }
+       const routine = rest.join(" ").trim();
+       if (!routine)
+@@ -1500,8 +1591,8 @@ ${formatUsage(s.usage)}` : ""}`);
+       if (action === "remove" && !flags.yes)
+         throw new Error(`This permanently deletes the routine "${routine}". Run again with --yes to confirm.`);
+       if (action === "run") {
+-        const r = await withApp2((c) => runRoutine(c, bot, routine));
+-        return out(r, () => `Started ${r.routine.name} for ${r.bot}. Run \`grokbot wait ${r.bot}\` for the result.`);
++        const r2 = await withApp2((c) => runRoutine(c, bot, routine));
++        return out(r2, () => `Started ${r2.routine.name} for ${r2.bot}. Run \`grokbot wait ${r2.bot}\` for the result.`);
+       }
+       const r = await withApp2((c) => changeRoutine(c, bot, action, routine, timing));
+       return printChange(r, { enable: "Turned on", disable: "Turned off", remove: "Deleted" }[action], !!flags.json);
+@@ -1518,11 +1609,18 @@ ${formatUsage(s.usage)}` : ""}`);
+         process.exitCode = 1;
+       return out(r, () => r.selected ? `Opened ${r.bot} in Grok Bot.` : r.focused ? `Brought Grok Bot to the front, but couldn't select ${r.bot}.` : `Couldn't open ${r.bot}.`);
+     }
++    case "office-watch": {
++      await withApp2((c) => {
++        console.error("[grokbot] Watching tool steps. Press Ctrl-C to stop.");
++        return officeWatch(c, (e) => console.log(JSON.stringify(e)));
++      });
++      return;
++    }
+     case "internals": {
+       const r = await withApp2(internalsCheck);
+       return out(r, () => [
+         `Grok Bot ${r.appVersion ?? "(version unknown)"}`,
+-        ...Object.entries(r.checks).map(([k, ok]) => `${ok ? "ok  " : "FAIL"} ${k}`)
++        ...Object.entries(r.checks).map(([k, ok]) => `${ok === null ? "?   " : ok ? "ok  " : "FAIL"} ${k}`)
+       ].join(`
+ `));
+     }
+diff --git a/src/adapter/grokbot-internals.test.ts b/src/adapter/grokbot-internals.test.ts
+index 3750b35..974357d 100644
+--- a/src/adapter/grokbot-internals.test.ts
++++ b/src/adapter/grokbot-internals.test.ts
+@@ -2,7 +2,7 @@
+ // If an app update renames a store or field, update the fake and NAMES together:
+ // these tests say which piece no longer matches.
+ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+-import { PAGE_INTERNALS, PAGE_OFFICE_INFO, PAGE_OPEN } from "./grokbot-internals.ts";
++import { PAGE_INTERNALS, PAGE_OFFICE_INFO, PAGE_OPEN, PAGE_TOOL_WATCH } from "./grokbot-internals.ts";
+ 
+ type Row = Record<string, unknown>;
+ 
+@@ -30,8 +30,18 @@ function fakeApp(opts: { rows?: Row[]; mainId?: string | null; phase?: string; s
+     },
+     { id: "g", name: "Group", isGroup: true },
+   ];
++  const subscribers: (() => void)[] = [];
+   const ctx: Record<string, unknown> = {
+-    roster: { createAgent: () => calls.push("createAgent"), snapshots: { get: () => ({ agents: { rows } }) } },
++    roster: {
++      createAgent: () => calls.push("createAgent"),
++      snapshots: {
++        get: () => ({ agents: { rows } }),
++        subscribe: (fn: () => void) => {
++          subscribers.push(fn);
++          return () => subscribers.splice(subscribers.indexOf(fn), 1);
++        },
++      },
++    },
+     mainAgent: {
+       ensureDefault: () => calls.push("ensureDefault"),
+       snapshots: { get: () => ({ status: "ready", value: opts.mainId === null ? null : { agentId: opts.mainId ?? "a" } }) },
+@@ -54,7 +64,11 @@ function fakeApp(opts: { rows?: Row[]; mainId?: string | null; phase?: string; s
+   const g = globalThis as Record<string, unknown>;
+   g.document = { querySelector: (sel: string) => (sel.startsWith(".sand-agent-item") ? el : null) };
+   g.navigator = { userAgent: "Mozilla/5.0 (Macintosh) GrokBot/0.78.1 Chrome/148 Electron/42" };
+-  return { calls };
++  g.window = g;
++  const changed = () => {
++    for (const fn of [...subscribers]) fn();
++  };
++  return { calls, rows, changed, subscribers };
+ }
+ 
+ // Indirect eval, like CDP's Runtime.evaluate: the page code sees only globals.
+@@ -65,7 +79,7 @@ const run = <T>(fn: string, ...args: unknown[]): Promise<T> => pageEval(`(${fn})
+ let saved: Record<string, unknown>;
+ beforeEach(() => {
+   const g = globalThis as Record<string, unknown>;
+-  saved = { document: g.document, navigator: g.navigator };
++  saved = { document: g.document, navigator: g.navigator, window: g.window };
+ });
+ afterEach(() => Object.assign(globalThis, saved));
+ 
+@@ -75,15 +89,15 @@ describe("office info", () => {
+     const info = await run<{ computerPhase: string; profiles: unknown[] }>(PAGE_OFFICE_INFO);
+     expect(info.computerPhase).toBe("away");
+     expect(info.profiles).toEqual([
+-      { id: "a", avatar: { shape: "blob", color: "black", hasPhoto: false }, main: true },
+-      { id: "b", avatar: { shape: "heart", color: "red", hasPhoto: true }, main: false },
++      { id: "a", avatar: { shape: "blob", color: "black", hasPhoto: false }, main: true, tool: null, toolName: null, status: null },
++      { id: "b", avatar: { shape: "heart", color: "red", hasPhoto: true }, main: false, tool: null, toolName: null, status: null },
+     ]);
+   });
+ 
+   test("gives null avatars instead of failing when the fields are gone", async () => {
+     fakeApp({ rows: [{ id: "a", name: "Ada", isGroup: false }], mainId: null });
+     const info = await run<{ profiles: unknown[] }>(PAGE_OFFICE_INFO);
+-    expect(info.profiles).toEqual([{ id: "a", avatar: null, main: false }]);
++    expect(info.profiles).toEqual([{ id: "a", avatar: null, main: false, tool: null, toolName: null, status: null }]);
+   });
+ });
+ 
+@@ -92,7 +106,7 @@ describe("internals check", () => {
+     fakeApp();
+     expect(await run(PAGE_INTERNALS)).toEqual({
+       appVersion: "0.78.1",
+-      checks: { roster: true, avatars: true, mainAgent: true, computerPhase: true, selection: true, focusWindow: true },
++      checks: { roster: true, avatars: true, mainAgent: true, computerPhase: true, selection: true, focusWindow: true, toolSteps: null },
+     });
+   });
+ 
+@@ -119,3 +133,90 @@ describe("open", () => {
+     expect(calls).toEqual([]);
+   });
+ });
++
++const working = (activity: unknown, extra: Row = {}): Row => ({
++  id: "w",
++  name: "Wes - The Worker",
++  isGroup: false,
++  avatarShape: "blob",
++  isRunning: true,
++  awaitingUserResponse: null,
++  currentActivity: activity,
++  ...extra,
++});
++
++describe("tool steps", () => {
++  test.each([
++    [{ kind: "tool", tool: "WebFetch" }, "browser"],
++    [{ kind: "tool", tool: "WebSearch" }, "browser"],
++    [{ kind: "tool", tool: "browser_click" }, "browser"],
++    [{ kind: "tool", tool: "Shell" }, "shell"],
++    [{ kind: "tool", tool: "AwaitShell", detail: "x" }, "shell"],
++    [{ kind: "tool", tool: "Shell", detail: "notes.md" }, "file"],
++    [{ kind: "tool", tool: "Read" }, "file"],
++    [{ kind: "tool", tool: "CloudAgent" }, "editor"],
++    [{ kind: "tool", tool: "SendToAgent" }, null],
++    [{ kind: "thinking" }, null],
++  ])("%j is %s", async (activity, tool) => {
++    fakeApp({ rows: [working(activity)] });
++    const info = await run<{ profiles: { tool: unknown }[] }>(PAGE_OFFICE_INFO);
++    expect(info.profiles[0].tool).toBe(tool);
++  });
++
++  test("a Bot's own status line comes as status, with no tool", async () => {
++    fakeApp({ rows: [working({ kind: "tool", tool: "SetStatus", detail: " cercando sul web " })] });
++    const info = await run<{ profiles: unknown[] }>(PAGE_OFFICE_INFO);
++    expect(info.profiles[0]).toMatchObject({ tool: null, toolName: "SetStatus", status: "cercando sul web" });
++  });
++
++  test("no tool unless the Bot is working on its own", async () => {
++    fakeApp({ rows: [working({ kind: "tool", tool: "WebFetch" }, { isRunning: false })] });
++    expect((await run<{ profiles: { tool: unknown }[] }>(PAGE_OFFICE_INFO)).profiles[0].tool).toBeNull();
++    fakeApp({ rows: [working({ kind: "tool", tool: "WebFetch" }, { awaitingUserResponse: { id: "q" } })] });
++    expect((await run<{ profiles: { tool: unknown }[] }>(PAGE_OFFICE_INFO)).profiles[0].tool).toBeNull();
++  });
++
++  test("internals says whether working Bots carry the field", async () => {
++    fakeApp({ rows: [working({ kind: "thinking" })] });
++    expect((await run<{ checks: { toolSteps: unknown } }>(PAGE_INTERNALS)).checks.toolSteps).toBe(true);
++    fakeApp({ rows: [{ id: "w", name: "Wes", isGroup: false, isRunning: true }] });
++    expect((await run<{ checks: { toolSteps: unknown } }>(PAGE_INTERNALS)).checks.toolSteps).toBe(false);
++  });
++
++  test("office-watch emits each Bot once, then only changes, and ends with the heartbeat", async () => {
++    const app = fakeApp({ rows: [working({ kind: "thinking" })] });
++    const events: { bot: string; id: string; tool: unknown; name: unknown; status: unknown }[] = [];
++    const g = globalThis as Record<string, unknown>;
++    g.__sink = (p: string) => events.push(JSON.parse(p));
++    const beat = "beat_test";
++    const grok: Record<string, unknown> = { [beat]: Date.now() };
++    g.__grokbot = grok;
++    const done = run(PAGE_TOOL_WATCH, beat, "__sink");
++    await Promise.resolve();
++    expect(events.map((e) => [e.id, e.tool, e.name])).toEqual([["w", null, null]]);
++
++    app.rows[0] = working({ kind: "tool", tool: "WebFetch" });
++    app.changed();
++    app.changed();
++    app.rows[0] = working({ kind: "tool", tool: "Shell" });
++    app.changed();
++    app.rows[0] = working({ kind: "tool", tool: "SetStatus", detail: "cercando sul web" });
++    app.changed();
++    app.rows[0] = working({ kind: "tool", tool: "SetStatus", detail: "eseguendo comandi" });
++    app.changed();
++    expect(events.map((e) => [e.tool, e.name, e.status])).toEqual([
++      [null, null, null],
++      ["browser", "WebFetch", null],
++      ["shell", "Shell", null],
++      [null, "SetStatus", "cercando sul web"],
++      [null, "SetStatus", "eseguendo comandi"],
++    ]);
++
++    grok[beat] = 1; // last heartbeat long ago
++    (grok.ticks as Record<string, () => void>)[beat]();
++    await done;
++    expect(app.subscribers).toHaveLength(0);
++    delete g.__sink;
++    delete g.__grokbot;
++  });
++});
+diff --git a/src/adapter/grokbot-internals.ts b/src/adapter/grokbot-internals.ts
+index a3e7bf4..9041345 100644
+--- a/src/adapter/grokbot-internals.ts
++++ b/src/adapter/grokbot-internals.ts
+@@ -1,9 +1,11 @@
+ // Grok Bot internals used by Grok Bot Office on top of the upstream bridge: each Bot's
+-// avatar, the main Bot, the Bot computer's phase, and opening a conversation in the app.
++// avatar, the main Bot, the Bot computer's phase, the tool a working Bot is using, and
++// opening a conversation in the app.
+ // Every store and field name the office relies on lives in this file, so an app update
+ // breaks it in one place. `internals` (CLI) reports which pieces still work; callers
+ // degrade instead of failing when one doesn't.
+ // Seen in Grok Bot 0.78.1.
++import { withHeartbeat } from "../bot.ts";
+ import type { CDP } from "../cdp.ts";
+ import { BOX_PHASE, store } from "../page.ts";
+ 
+@@ -16,6 +18,47 @@ export const NAMES = {
+     avatarColor: "avatarColor",
+     photo: ["avatarPhoto", "avatarDataUrl"],
+   },
++  /**
++   * What a working Bot is doing, on its Bot-list row: { kind: "thinking" | "tool", tool, detail, target }.
++   * The app turns it into "Browsing the web", "Running commands"… and reads it only while the Bot is working.
++   * Bots that write their own status line ("cercando sul web") show only that, as the SetStatus tool with
++   * the text in `detail`: in 0.78.1 their other tools never reach the renderer.
++   */
++  activity: { field: "currentActivity", kind: "kind", tool: "tool", detail: "detail", thinking: "thinking", statusTool: "SetStatus" },
++  /**
++   * The app's tool names, by the kind of work the office shows. Shell tools with a `detail` are the
++   * app's "Drafting the file". Tools not listed here (messaging, memory, connectors…) show as thinking.
++   */
++  tools: {
++    browser: [
++      "WebSearch",
++      "WebFetch",
++      "PlacesSearch",
++      "WeatherForecast",
++      "RestaurantSearch",
++      "FlightSearch",
++      "FlightDetails",
++      "ProductSearch",
++      "BrowserSecureFill",
++      "RemapUserFormTargets",
++      "remap_user_form_targets",
++    ],
++    browserPrefix: "browser_",
++    shell: ["Shell", "BoxShell", "MachineShell", "AwaitShell", "Await"],
++    file: [
++      "Read",
++      "BoxRead",
++      "CopyToBox",
++      "CopyFromBox",
++      "CopyBotFile",
++      "ReadDocument",
++      "WriteDocument",
++      "WriteDocumentAsset",
++      "EditCanvas",
++      "WriteCanvasAsset",
++    ],
++    editor: ["CloudAgent"],
++  },
+   mainAgent: { store: "mainAgent", method: "ensureDefault" },
+   selection: { store: "selection", method: "select", current: "readCurrentAgentId" },
+   desktop: { store: "desktop", method: "focusWindow" },
+@@ -25,6 +68,11 @@ export type OfficeProfile = {
+   id: string;
+   avatar: { shape: string | null; color: string | null; hasPhoto: boolean } | null;
+   main: boolean;
++  /** Tool in use while working (null: thinking, idle or waiting on you), and the app's name for it. */
++  tool: ToolKind | null;
++  toolName: string | null;
++  /** The status line the Bot wrote for itself while working ("cercando sul web"), if any. */
++  status: string | null;
+ };
+ 
+ export type OfficeInfo = {
+@@ -33,9 +81,26 @@ export type OfficeInfo = {
+   computerPhase: string | null;
+ };
+ 
++/** Kind of work behind a tool, as the office maps it to a state. */
++export type ToolKind = "browser" | "shell" | "editor" | "file" | "git";
++
++/** `office-watch` line: the tool a Bot is using, or its own status line, changed (null: thinking, idle or waiting on you). */
++export type ToolEvent = {
++  type: "tool";
++  bot: string;
++  id: string;
++  tool: ToolKind | null;
++  name: string | null;
++  status: string | null;
++  at: string;
++};
++
+ export type InternalsCheck = {
+   appVersion: string | null;
+-  checks: Record<"roster" | "avatars" | "mainAgent" | "computerPhase" | "selection" | "focusWindow", boolean>;
++  /** `toolSteps` is null while no Bot is working: the app sets the field only during a turn. */
++  checks: Record<"roster" | "avatars" | "mainAgent" | "computerPhase" | "selection" | "focusWindow", boolean> & {
++    toolSteps: boolean | null;
++  };
+ };
+ 
+ const N = JSON.stringify(NAMES);
+@@ -51,6 +116,23 @@ const STORES = `
+     try { const s = mainAgent && mainAgent.snapshots.get(); return (s && s.value && s.value.agentId) || null; } catch { return null; }
+   };
+   const phase = () => { try { const p = ${BOX_PHASE}; return typeof p === "string" ? p : null; } catch { return null; } };
++  const working = (r) => r.awaitingUserResponse == null && !!(r.isRunning || r.isRunningTurn || r.isComposingMessage);
++  const toolOf = (r) => {
++    const a = NAMES.activity, t = NAMES.tools;
++    const act = working(r) ? r[a.field] : null;
++    const none = { tool: null, name: null, status: null };
++    if (!act || typeof act !== "object" || act[a.kind] === a.thinking) return none;
++    const name = typeof act[a.tool] === "string" && act[a.tool] ? act[a.tool] : null;
++    if (!name) return none;
++    const drafting = typeof act[a.detail] === "string" && act[a.detail].trim() !== "";
++    if (name === a.statusTool) return { tool: null, name, status: drafting ? act[a.detail].trim().slice(0, 120) : null };
++    const tool = t.browser.includes(name) || name.startsWith(t.browserPrefix) ? "browser"
++      : t.shell.includes(name) ? (drafting && name !== "AwaitShell" && name !== "Await" ? "file" : "shell")
++      : t.file.includes(name) ? "file"
++      : t.editor.includes(name) ? "editor"
++      : null;
++    return { tool, name, status: null };
++  };
+ `;
+ 
+ export const PAGE_OFFICE_INFO = `async () => {${STORES}
+@@ -68,6 +150,7 @@ export const PAGE_OFFICE_INFO = `async () => {${STORES}
+             hasPhoto: f.photo.some((k) => !!r[k]) }
+         : null,
+       main: !!main && r.id === main,
++      ...(() => { const t = toolOf(r); return { tool: t.tool, toolName: t.name, status: t.status }; })(),
+     })),
+   };
+ }`;
+@@ -84,6 +167,7 @@ export const PAGE_INTERNALS = `async () => {${STORES}
+       computerPhase: phase() !== null,
+       selection: !!selection && typeof selection[NAMES.selection.current] === "function",
+       focusWindow: !!desktop && typeof desktop[NAMES.desktop.method] === "function",
++      toolSteps: rows.some(working) ? rows.filter(working).some((r) => NAMES.activity.field in r) : null,
+     },
+   };
+ }`;
+@@ -109,6 +193,41 @@ export const PAGE_OPEN = `async (id) => {${STORES}
+   return { selected, focused };
+ }`;
+ 
++/**
++ * Streams the tool each Bot is using, or its own status line: one event per Bot on start, then one whenever it changes.
++ * Kept alive by the CLI's heartbeat, like the upstream `watch`; ends when the heartbeats stop.
++ */
++export const PAGE_TOOL_WATCH = `async (beat, sink) => {${STORES}
++  if (!roster) throw new Error("Couldn't reach Grok Bot's Bot list.");
++  const g = (window.__grokbot = window.__grokbot || {});
++  const alive = () => Date.now() - (g[beat] || Date.now()) < 45000;
++  const emit = (ev) => { try { if (typeof window[sink] === "function") window[sink](JSON.stringify(ev)); } catch {} };
++  const last = new Map();
++  let finish;
++  const finished = new Promise((resolve) => { finish = resolve; });
++  const tick = () => {
++    if (!alive()) return finish();
++    for (const r of roster.snapshots.get().agents.rows) {
++      if (r.isGroup) continue;
++      const t = toolOf(r), key = JSON.stringify(t);
++      if (last.get(r.id) === key) continue;
++      last.set(r.id, key);
++      emit({ type: "tool", bot: r.name, id: r.id, ...t, at: new Date().toISOString() });
++    }
++  };
++  const unsub = roster.snapshots.subscribe(tick);
++  g.ticks = g.ticks || {};
++  g.ticks[beat] = tick;
++  tick();
++  // Heartbeats tick every second; this catches the last one going missing.
++  const iv = setInterval(() => { if (!alive()) finish(); }, 5000);
++  await finished;
++  clearInterval(iv);
++  if (typeof unsub === "function") unsub();
++  delete g.ticks[beat];
++  delete g[beat];
++}`;
++
+ export async function officeInfo(cdp: CDP): Promise<OfficeInfo> {
+   return cdp.call<OfficeInfo>(PAGE_OFFICE_INFO);
+ }
+@@ -117,6 +236,13 @@ export async function internalsCheck(cdp: CDP): Promise<InternalsCheck> {
+   return cdp.call<InternalsCheck>(PAGE_INTERNALS);
+ }
+ 
++/** Streams tool changes for every Bot until the process exits. */
++export async function officeWatch(cdp: CDP, onEvent: (e: ToolEvent) => void): Promise<void> {
++  await cdp.send("Runtime.enable");
++  const sink = await cdp.bind((p) => onEvent(JSON.parse(p)));
++  await withHeartbeat(cdp, (beat) => cdp.call(PAGE_TOOL_WATCH, beat, sink));
++}
++
+ export async function openConversation(cdp: CDP, id: string): Promise<{ selected: boolean; focused: boolean }> {
+   return cdp.call(PAGE_OPEN, id);
+ }
+diff --git a/src/bot.ts b/src/bot.ts
+index cdfdb2a..61e65a0 100644
+--- a/src/bot.ts
++++ b/src/bot.ts
+@@ -358,7 +358,7 @@ export async function send(cdp: CDP, botQuery: string, text: string, files: stri
+ export type WaitOptions = { since?: string; timeoutMs?: number; settleMs?: number; onUpdate?: (m: Message) => void };
+ 
+ /** Keeps a long page-side wait alive and ticks its clock each second; the page gives up if the heartbeats stop. */
+-async function withHeartbeat<T>(cdp: CDP, fn: (beat: string) => Promise<T>): Promise<T> {
++export async function withHeartbeat<T>(cdp: CDP, fn: (beat: string) => Promise<T>): Promise<T> {
+   const beat = `beat_${process.pid}_${Date.now()}`;
+   const name = JSON.stringify(beat);
+   const touch = () =>
+diff --git a/src/cli.ts b/src/cli.ts
+index 39a6bbb..7cc46e0 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env node
+-import { internalsCheck, officeInfo, openConversation } from "./adapter/grokbot-internals.ts";
++import { internalsCheck, officeInfo, officeWatch, openConversation } from "./adapter/grokbot-internals.ts";
+ import { launch, restore } from "./app.ts";
+ import {
+   ask,
+@@ -39,8 +39,9 @@ Usage:
+   grokbot routines enable|disable <bot> <routine>   Ask the Bot to turn a routine on or off
+   grokbot routines remove <bot> <routine> --yes   Ask the Bot to delete a routine (exact name or id)
+   grokbot routines run <bot> <routine>   Run a routine now (needs its computer awake)
+-  grokbot bots                      List your Bots and what each is doing (--json adds avatar, main and computerPhase)
++  grokbot bots                      List your Bots and what each is doing (--json adds avatar, main, tool and computerPhase)
+   grokbot open <bot>                Show the Bot's conversation and bring Grok Bot to the front
++  grokbot office-watch              Stream the tool each Bot is using (browser, shell, file, editor) or its status line, as JSON lines
+   grokbot internals                 Check which app internals the office adapter can reach
+   grokbot create <name>             Create a Bot (--description <text>)
+   grokbot update <bot>              Rename a Bot or change its description (--name, --description)
+@@ -219,6 +220,9 @@ async function main() {
+           ...b,
+           avatar: byId.get(b.id)?.avatar ?? null,
+           main: byId.get(b.id)?.main ?? false,
++          tool: byId.get(b.id)?.tool ?? null,
++          toolName: byId.get(b.id)?.toolName ?? null,
++          status: byId.get(b.id)?.status ?? null,
+           computerPhase: extra.computerPhase,
+         }));
+         return out(merged, () => "");
+@@ -359,12 +363,19 @@ async function main() {
+             : `Couldn't open ${r.bot}.`,
+       );
+     }
++    case "office-watch": {
++      await withApp((c) => {
++        console.error("[grokbot] Watching tool steps. Press Ctrl-C to stop.");
++        return officeWatch(c, (e) => console.log(JSON.stringify(e)));
++      });
++      return;
++    }
+     case "internals": {
+       const r = await withApp(internalsCheck);
+       return out(r, () =>
+         [
+           `Grok Bot ${r.appVersion ?? "(version unknown)"}`,
+-          ...Object.entries(r.checks).map(([k, ok]) => `${ok ? "ok  " : "FAIL"} ${k}`),
++          ...Object.entries(r.checks).map(([k, ok]) => `${ok === null ? "?   " : ok ? "ok  " : "FAIL"} ${k}`),
+         ].join("\n"),
+       );
+     }
+-- 
+2.50.1 (Apple Git-155)
+

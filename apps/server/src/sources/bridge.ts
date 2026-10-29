@@ -2,15 +2,18 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { avatarFromApp, type Task } from '@grok-office/shared';
 import { config } from '../config.js';
-import type { BotSource, BotSignals, SourceSink } from './source.js';
+import { toolFromStatusText } from '../status.js';
+import type { BotSource, BotSignals, SourceSink, ToolKind } from './source.js';
 
 // grokbot-bridge adapter. Live state comes from `grokbot watch --json` (one JSON event per
 // line); the bot list from `grokbot bots --json`; a bot's task and replies from
 // `grokbot read <bot> --json --limit 20` whenever it changes state.
 //
 // With the office fork of the bridge (bridge-fork/ in this repo), `bots --json` also
-// carries each Bot's avatar, the main Bot and the Bot computer's phase, and `open <bot>`
-// shows a conversation; with the upstream bridge those degrade to defaults.
+// carries each Bot's avatar, the main Bot and the Bot computer's phase, `open <bot>`
+// shows a conversation, and `office-watch` streams the tool each Bot is using (browser,
+// shell, file, editor); with the upstream bridge those degrade to defaults and working
+// bots show as thinking.
 //
 // The office never starts, quits or restarts Grok Bot. Every bridge command except
 // `status` would relaunch the app with the debug port when it can't reach it, so each
@@ -37,6 +40,26 @@ interface BridgeBot {
   avatar?: { shape: string | null; color: string | null; hasPhoto?: boolean } | null;
   main?: boolean;
   computerPhase?: string | null;
+  tool?: string | null;
+  status?: string | null;
+}
+
+/** What the Team list says while a bot uses a kind of tool, like the app's own status line. */
+const TOOL_ACTIVITY: Record<ToolKind, string> = {
+  browser: 'Browsing the web',
+  shell: 'Running commands',
+  file: 'Working on files',
+  editor: 'Coding',
+  git: 'Working with git',
+};
+
+/** `grokbot office-watch` line (office fork). */
+interface ToolEvent {
+  type: 'tool';
+  id: string;
+  tool: ToolKind | null;
+  /** The bot's own status line, when it writes one instead of showing its tools. */
+  status?: string | null;
 }
 
 /** Computer phases in which Grok Bot has parked the Bot's computer. */
@@ -82,6 +105,8 @@ export class BridgeSource implements BotSource {
   private connecting = false;
   private attempt = 0;
   private watcher?: ChildProcess;
+  private toolWatcher?: ChildProcess;
+  private toolRetryTimer?: NodeJS.Timeout;
   private retryTimer?: NodeJS.Timeout;
   private pollTimer?: NodeJS.Timeout;
   private readonly readTimers = new Map<string, NodeJS.Timeout>();
@@ -179,6 +204,7 @@ export class BridgeSource implements BotSource {
       if (!isObject(status) || status.connected !== true) throw new NotConnectedError();
       await this.refreshBots(true);
       this.startWatch();
+      this.startToolWatch();
       this.connected = true;
       this.attempt = 0;
       this.lastError = undefined;
@@ -212,6 +238,10 @@ export class BridgeSource implements BotSource {
     const w = this.watcher;
     this.watcher = undefined;
     if (w && w.exitCode === null) w.kill('SIGTERM');
+    clearTimeout(this.toolRetryTimer);
+    const tw = this.toolWatcher;
+    this.toolWatcher = undefined;
+    if (tw && tw.exitCode === null) tw.kill('SIGTERM');
     if (wasConnected) this.sink?.connection('disconnected');
   }
 
@@ -229,6 +259,39 @@ export class BridgeSource implements BotSource {
       this.lastError = "Lost the connection to Grok Bot.";
       this.teardown();
       this.scheduleRetry();
+    };
+    child.on('exit', ended);
+    child.on('error', ended);
+  }
+
+  /**
+   * Tool steps from the fork's `office-watch`. Optional: with the upstream bridge, or if it
+   * fails, working bots show as thinking and nothing else changes.
+   */
+  private startToolWatch(): void {
+    const child = spawn(this.o.command, ['office-watch'], { env: this.env(), stdio: ['ignore', 'pipe', 'pipe'] });
+    this.track(child);
+    this.toolWatcher = child;
+    let streamed = false;
+    createInterface({ input: child.stdout! }).on('line', (line) => {
+      if (this.toolWatcher !== child) return;
+      const e = parseJson(line);
+      if (!isToolEvent(e) || !this.known.has(e.id)) return;
+      streamed = true;
+      this.sink?.updateBot(e.id, toolUpdate(e.tool, e.status));
+    });
+    child.stderr!.resume();
+    const ended = () => {
+      if (this.toolWatcher !== child) return;
+      this.toolWatcher = undefined;
+      // Don't leave a bot stuck on its last tool.
+      for (const id of this.known) this.sink?.updateBot(id, { signals: { tool: null } });
+      // It worked before (a hiccup): try again. It never did (upstream bridge): leave it.
+      if (streamed && this.connected) {
+        this.toolRetryTimer = setTimeout(() => {
+          if (this.connected && !this.toolWatcher) this.startToolWatch();
+        }, this.o.retryMaxMs);
+      }
     };
     child.on('exit', ended);
     child.on('error', ended);
@@ -358,6 +421,7 @@ export class BridgeSource implements BotSource {
                 error: false,
                 computerAsleep: isAsleep(b),
                 lastReplyAt: b.lastActivity ?? undefined,
+                ...(isToolKind(b.tool) || b.tool === null ? { tool: toolUpdate(b.tool, b.status).signals.tool } : {}),
               },
             }
           : typeof b.computerPhase === 'string'
@@ -411,7 +475,10 @@ export class BridgeSource implements BotSource {
           }
           const msg = /grokbot: (.+)/.exec(stderr)?.[1] ?? err.message;
           // Our never-launch guard tripping means the app isn't reachable.
-          reject(/app not found|isn't reachable|no Grok Bot window/i.test(msg) ? new NotConnectedError() : new Error(msg));
+          if (/no Grok Bot window/i.test(msg)) {
+            return reject(new NotConnectedError('Grok Bot is running, but its window is closed. Open it from the Dock, then Reconnect.'));
+          }
+          reject(/app not found|isn't reachable/i.test(msg) ? new NotConnectedError() : new Error(msg));
         },
       );
       this.track(child);
@@ -452,6 +519,30 @@ function isWatchEvent(v: unknown): v is WatchEvent {
   if (!isObject(v) || !isStr(v.bot)) return false;
   if (v.type === 'message') return isMessage(v);
   return v.type === 'working' || v.type === 'idle' || v.type === 'needs_input';
+}
+
+const TOOL_KINDS = new Set<string>(['browser', 'shell', 'file', 'editor', 'git']);
+
+function isToolKind(v: unknown): v is ToolKind {
+  return typeof v === 'string' && TOOL_KINDS.has(v);
+}
+
+function isToolEvent(v: unknown): v is ToolEvent {
+  return (
+    isObject(v) && v.type === 'tool' && isStr(v.id) && (v.tool === null || isToolKind(v.tool)) &&
+    (v.status === undefined || v.status === null || isStr(v.status))
+  );
+}
+
+/**
+ * The tool from office-watch, else the one the bot's status line talks about; the status line,
+ * if any, is what the bot is doing in its own words.
+ */
+function toolUpdate(tool: ToolKind | null, status: string | null | undefined) {
+  const text = status?.trim() ? clip(status.trim(), 120) : null;
+  const kind = tool ?? toolFromStatusText(text);
+  const activity = text ? text.charAt(0).toUpperCase() + text.slice(1) : tool ? TOOL_ACTIVITY[tool] : undefined;
+  return { signals: { tool: kind }, ...(activity ? { activity } : {}) };
 }
 
 function isAsleep(b: BridgeBot): boolean {

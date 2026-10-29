@@ -16,8 +16,8 @@ le azioni da fare, nell'ordine. La specifica resta `SPEC.md`; questo file dice c
 | M0 Mock | ✅ `pnpm dev --mock`, tutti gli stati in 2 minuti (test automatico) |
 | M1 Scena | ✅ selezione + camera, ora del giorno, reduced motion, 14 avatar di Grok Bot in 3D |
 | M2 Pannelli | ✅ Team, Dettaglio, Activity, toast, bottom sheet mobile, test di coerenza col server |
-| M3 Bridge live | ✅ codice; ⏳ i due criteri vanno verificati sul Mac (passo 3) |
-| M4 Attività fini | ⏳ da fare (passo 4): gli step dei tool non sono dove il bridge li cercava |
+| M3 Bridge live | ✅ verificata sul Mac il 29.10.2026 (log in 0,8–1,4 s, riconnessione da sola) |
+| M4 Attività fini | ✅ verificata sul Mac: `office-watch` legge `currentActivity` del roster; i bot con riga di stato (`SetStatus`) si classificano dalle parole (`toolFromStatusText`) |
 | M5 Approvazioni | ⏳ V1 da verificare, V2 da fare **dietro un ok esplicito dell'utente** (passo 5) |
 | M6 Rifinitura | ✅ `pnpm start`, chime, notifiche, header di sicurezza; ⏳ 60 fps sul Mac (passo 6) |
 

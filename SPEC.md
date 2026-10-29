@@ -249,8 +249,8 @@ Si parte dalla modalità mock, così scena e pannelli si costruiscono senza tocc
    - [x] Un messaggio mandato a un bot dall'app compare nel log entro 2 s
    - [x] Chiudendo l'app il badge passa a Disconnected e si riprende da solo
 5. **M4 · Attività fini**: fork per gli step dei tool, mapping coding / browsing / terminal.
-   - [ ] Un bot che apre il browser passa a browsing
-   - [ ] Se il fork fallisce, gli stati collassano in thinking senza errori in UI
+   - [x] Un bot che apre il browser passa a browsing
+   - [x] Se il fork fallisce, gli stati collassano in thinking senza errori in UI
 6. **M5 · Approvazioni**: V1, poi V2.
    - [ ] V1: needs_you compare entro 2 s e Apri in Grok Bot porta sulla conversazione giusta
    - [ ] V2: Allow once e Deny funzionano, l'esito è nel toast e in `audit.log`
