@@ -27,7 +27,7 @@ const source: BotSource = mock
       showcase: process.env.GBO_MOCK_SHOWCASE === '1',
     })
   : new BridgeSource();
-const app = buildApp(state, auth, source);
+const app = buildApp(state, auth, source, { staticDir: config.staticDir });
 
 await app.listen({ host: config.host, port: config.port });
 const tick = setInterval(() => state.tick(), config.tickMs);

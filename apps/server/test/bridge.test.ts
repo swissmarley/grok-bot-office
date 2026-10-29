@@ -147,6 +147,16 @@ describe('BridgeSource', () => {
     expect(calls()).toContainEqual(expect.objectContaining({ cmd: 'stop', args: ['c1', '--json'] }));
   });
 
+  it('leaves no grokbot processes behind when stopped', async () => {
+    const { dir, state, source, events, watching } = setup();
+    await source.start(state.sink);
+    await until(() => events.some((e) => e.type === 'connection' && e.state === 'connected'));
+    await watching();
+    const pid = Number(readFileSync(join(dir, 'watch-ready'), 'utf8'));
+    await source.stop();
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
+
   it('ignores malformed watch lines', async () => {
     const { dir, state, source, events } = setup();
     await source.start(state.sink);

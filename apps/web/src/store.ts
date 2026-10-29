@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { EMPTY_VIEW, applyToView, type Bot, type OfficeEvent } from '@grok-office/shared';
+import { loadMuted, saveMuted } from './prefs';
 
 export type Link = 'connecting' | 'open' | 'closed' | 'unauthorized';
 export type TimeOfDay = 'now' | 'day' | 'evening' | 'night';
@@ -33,6 +34,9 @@ interface OfficeStore {
   timeOfDay: TimeOfDay;
   /** Show every bot's speech bubble. */
   allTasks: boolean;
+  /** No chime on needs_you. */
+  muted: boolean;
+  setMuted(muted: boolean): void;
   apply(event: OfficeEvent): void;
   setLink(link: Link): void;
   select(id: string | null): void;
@@ -59,6 +63,11 @@ export const useOffice = create<OfficeStore>((set, get) => ({
   hoveredId: null,
   timeOfDay: 'now',
   allTasks: false,
+  muted: loadMuted(),
+  setMuted: (muted) => {
+    saveMuted(muted);
+    set({ muted });
+  },
   setLink: (link) => set({ link }),
   select: (selectedId) => set({ selectedId }),
   hover: (hoveredId) => set({ hoveredId }),

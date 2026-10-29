@@ -37,6 +37,27 @@ pnpm test        # server and web unit tests
 pnpm typecheck
 ```
 
+## Everyday use: one command
+
+```sh
+pnpm start            # your bots through grokbot-bridge (run `grokbot launch` first)
+pnpm start --mock     # the scripted demo bots
+```
+
+It builds the UI when it changed, starts the office on `127.0.0.1:4317` serving it,
+and opens your browser with a one-time token (`--no-open` to just print the link).
+Run `pnpm link --global` once in this folder to get the same as a `grok-office`
+command anywhere. (Not `npx grok-office`: this project isn't on npm, and that name
+would fetch whatever someone else publishes under it.)
+
+In the header: the speaker toggles a short chime when a bot starts needing you (it
+plays after your first click or key press on the page, as browsers require), and the
+bell asks permission for system notifications when the tab is in the background.
+Add `&stats` to the URL for an FPS meter.
+
+The server sends `X-Frame-Options: DENY` and a strict Content-Security-Policy
+(scripts only from itself, no framing), since the page can act on your bots.
+
 ## With your real bots (grokbot-bridge)
 
 Requirements: the Grok Bot desktop app signed in with at least one Bot, and
@@ -46,7 +67,7 @@ Requirements: the Grok Bot desktop app signed in with at least one Bot, and
 ```sh
 npm install -g https://github.com/TheSethRose/grokbot-bridge/archive/refs/heads/main.tar.gz
 grokbot launch     # restarts Grok Bot with the debug port on 127.0.0.1:9333
-pnpm dev           # no --mock: the office reads your bots through the bridge
+pnpm start         # or `pnpm dev` while developing; no --mock: your bots via the bridge
 grokbot restore    # when you're done: restarts Grok Bot normally, closing the port
 ```
 

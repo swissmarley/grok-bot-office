@@ -1,3 +1,4 @@
+import { useNeedsYouAlerts } from './alerts';
 import { Footer } from './panels/Footer';
 import { Header } from './panels/Header';
 import { Sidebar } from './panels/Sidebar';
@@ -7,6 +8,7 @@ import { useOffice } from './store';
 
 export function App() {
   const link = useOffice((s) => s.link);
+  useNeedsYouAlerts();
   const offline = useOffice((s) => s.link !== 'open' || s.account.state !== 'connected');
   const hasBots = useOffice((s) => Object.keys(s.bots).length > 0);
 

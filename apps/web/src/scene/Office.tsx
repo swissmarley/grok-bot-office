@@ -1,5 +1,5 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrthographicCamera } from '@react-three/drei';
+import { OrthographicCamera, Stats } from '@react-three/drei';
 import { useEffect, useRef } from 'react';
 import { Vector3, type OrthographicCamera as ThreeOrthographicCamera } from 'three';
 import type { BotStatus } from '@grok-office/shared';
@@ -19,6 +19,9 @@ const ZOOM_MIN = 0.8;
 const ZOOM_MAX = 3;
 
 /** States with continuous motion; with none of these on screen the canvas renders on demand. */
+/** `?stats` shows an FPS meter, for the 60 fps check. */
+const SHOW_STATS = new URLSearchParams(location.search).has('stats');
+
 const MOVING: ReadonlySet<BotStatus> = new Set(['coding', 'browsing', 'terminal', 'thinking', 'needs_you', 'idle']);
 
 function CameraRig({ room, reduced }: { room: RoomSize; reduced: boolean }) {
@@ -96,6 +99,7 @@ export function Office() {
     >
       <color attach="background" args={[lighting.background]} />
       <CameraRig room={room} reduced={reduced} />
+      {SHOW_STATS && <Stats className="gbo-stats" />}
       <ambientLight color={lighting.ambient.color} intensity={lighting.ambient.intensity} />
       <hemisphereLight args={[lighting.hemi.sky, lighting.hemi.ground, lighting.hemi.intensity]} />
       <directionalLight

@@ -78,6 +78,8 @@ export class BridgeSource implements BotSource {
   private readonly idByName = new Map<string, string>();
   private readonly known = new Set<string>();
   private readonly tasks = new Map<string, Task>();
+  /** Every grokbot process still running, so stop() can end them all. */
+  private readonly children = new Set<ChildProcess>();
 
   constructor(opts: BridgeSourceOptions = {}) {
     const b = config.bridge;
@@ -103,6 +105,24 @@ export class BridgeSource implements BotSource {
     this.stopped = true;
     this.teardown();
     clearTimeout(this.retryTimer);
+    // Leave no grokbot processes behind.
+    await Promise.all(
+      [...this.children].map(
+        (child) =>
+          new Promise<void>((resolve) => {
+            if (child.exitCode !== null || child.signalCode !== null) return resolve();
+            const timer = setTimeout(() => {
+              child.kill('SIGKILL');
+              resolve();
+            }, 2000);
+            child.once('exit', () => {
+              clearTimeout(timer);
+              resolve();
+            });
+            child.kill('SIGTERM');
+          }),
+      ),
+    );
   }
 
   async stopBot(id: string): Promise<void> {
@@ -179,6 +199,7 @@ export class BridgeSource implements BotSource {
 
   private startWatch(): void {
     const child = spawn(this.o.command, ['watch', '--json'], { env: this.env(), stdio: ['ignore', 'pipe', 'pipe'] });
+    this.track(child);
     this.watcher = child;
     createInterface({ input: child.stdout! }).on('line', (line) => {
       if (this.watcher === child) this.onWatchLine(line);
@@ -354,8 +375,9 @@ export class BridgeSource implements BotSource {
 
   /** Runs a grokbot command; rejects with its own error message. */
   private run(args: string[]): Promise<string> {
+    if (this.stopped) return Promise.reject(new Error('The office is shutting down.'));
     return new Promise((resolve, reject) => {
-      execFile(
+      const child = execFile(
         this.o.command,
         args,
         { env: this.env(), timeout: this.o.commandTimeoutMs, maxBuffer: 16 * 1024 * 1024 },
@@ -369,7 +391,14 @@ export class BridgeSource implements BotSource {
           reject(/app not found|isn't reachable|no Grok Bot window/i.test(msg) ? new NotConnectedError() : new Error(msg));
         },
       );
+      this.track(child);
     });
+  }
+
+  private track(child: ChildProcess): void {
+    this.children.add(child);
+    child.once('exit', () => this.children.delete(child));
+    child.once('error', () => this.children.delete(child));
   }
 }
 

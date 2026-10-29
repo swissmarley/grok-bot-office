@@ -3,13 +3,30 @@ import type { Auth } from './auth.js';
 import type { OfficeState } from './office-state.js';
 import { ROLE_MAX_CHARS } from './roles.js';
 import type { BotSource } from './sources/source.js';
+import { serveStatic } from './static.js';
 import { attachWebSocket } from './ws.js';
 
 type BotParams = { Params: { id: string } };
 
 /** HTTP + WS server. No CORS: cross-origin requests get no Access-Control headers and fail. */
-export function buildApp(state: OfficeState, auth: Auth, source?: BotSource): FastifyInstance {
+export function buildApp(state: OfficeState, auth: Auth, source?: BotSource, opts: { staticDir?: string } = {}): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 16 * 1024 });
+
+  // The UI can approve real actions: no framing (clickjacking), no sniffing, no referrers,
+  // and the page may only talk to this server.
+  const wsHosts = [...auth.hosts].map((h) => `ws://${h}`).join(' ');
+  app.addHook('onSend', async (_req, reply) => {
+    reply.header('x-frame-options', 'DENY');
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('referrer-policy', 'no-referrer');
+    reply.header('cross-origin-opener-policy', 'same-origin');
+    reply.header('cross-origin-resource-policy', 'same-origin');
+    reply.header(
+      'content-security-policy',
+      `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; ` +
+        `connect-src 'self' ${wsHosts}; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+    );
+  });
 
   app.addHook('onRequest', async (req, reply) => {
     if (!auth.hostAllowed(req.headers)) return reply.code(403).send();
@@ -60,6 +77,8 @@ export function buildApp(state: OfficeState, auth: Auth, source?: BotSource): Fa
     state.setRole(req.params.id, role);
     return reply.code(204).send();
   });
+
+  if (opts.staticDir) serveStatic(app, opts.staticDir);
 
   const wss = attachWebSocket(app.server, state, auth);
   app.addHook('onClose', async () => {

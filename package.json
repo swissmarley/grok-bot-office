@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "start": "node scripts/start.mjs",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
   },
@@ -16,5 +17,8 @@
     "onlyBuiltDependencies": [
       "esbuild"
     ]
+  },
+  "bin": {
+    "grok-office": "scripts/start.mjs"
   }
 }

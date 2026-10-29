@@ -34,6 +34,8 @@ export const config = {
   port: Number(process.env.GBO_PORT ?? 4317),
   /** Origin the browser UI is served from; the Vite dev server in development. */
   webOrigin: process.env.GBO_WEB_ORIGIN ?? 'http://127.0.0.1:4317',
+  /** Built web UI to serve (production start); in development Vite serves it. */
+  staticDir: process.env.GBO_STATIC_DIR,
   deskCount: 8,
   /** How often time-based states (done → idle → sleeping, expiries) are re-evaluated. */
   tickMs: 1000,
