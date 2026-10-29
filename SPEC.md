@@ -237,14 +237,14 @@ L'ufficio può approvare azioni reali dei tuoi bot, quindi va trattato come un t
 Si parte dalla modalità mock, così scena e pannelli si costruiscono senza toccare l'app; il bridge entra solo alla M3.
 
 1. **M0 · Mock**: generatore di eventi con 5 bot (Scout Research, Brush Design, Patch Code, Tally Finance, Relay Social) che girano tra tutti gli stati.
-   - [ ] `pnpm dev --mock` mostra l'ufficio senza Grok Bot installato
-   - [ ] Ogni stato compare almeno una volta in 2 minuti
+   - [x] `pnpm dev --mock` mostra l'ufficio senza Grok Bot installato
+   - [x] Ogni stato compare almeno una volta in 2 minuti
 2. **M1 · Scena**: stanza, scrivanie, bot, animazioni di stato, ora del giorno.
-   - [ ] Click su un bot lo seleziona e centra la camera
-   - [ ] Night accende lampade e stelle; reduced motion toglie i rimbalzi
+   - [x] Click su un bot lo seleziona e centra la camera
+   - [x] Night accende lampade e stelle; reduced motion toglie i rimbalzi
 3. **M2 · Pannelli**: header, Team, Dettaglio, Activity, footer, toast.
-   - [ ] Contatori e scena restano coerenti con lo stato del server
-   - [ ] Layout mobile utilizzabile a 390 px di larghezza
+   - [x] Contatori e scena restano coerenti con lo stato del server
+   - [x] Layout mobile utilizzabile a 390 px di larghezza
 4. **M3 · Bridge live**: adapter su `bots`, `watch`, `read`, con riconnessione.
    - [x] Un messaggio mandato a un bot dall'app compare nel log entro 2 s
    - [x] Chiudendo l'app il badge passa a Disconnected e si riprende da solo
