@@ -1,12 +1,16 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { Task } from '@grok-office/shared';
+import { avatarFromApp, type Task } from '@grok-office/shared';
 import { config } from '../config.js';
 import type { BotSource, BotSignals, SourceSink } from './source.js';
 
 // grokbot-bridge adapter. Live state comes from `grokbot watch --json` (one JSON event per
 // line); the bot list from `grokbot bots --json`; a bot's task and replies from
 // `grokbot read <bot> --json --limit 20` whenever it changes state.
+//
+// With the office fork of the bridge (bridge-fork/ in this repo), `bots --json` also
+// carries each Bot's avatar, the main Bot and the Bot computer's phase, and `open <bot>`
+// shows a conversation; with the upstream bridge those degrade to defaults.
 //
 // The office never starts, quits or restarts Grok Bot. Every bridge command except
 // `status` would relaunch the app with the debug port when it can't reach it, so each
@@ -29,7 +33,14 @@ interface BridgeBot {
   unread: number;
   lastActivity: string | null;
   preview: string | null;
+  /** Office fork only. */
+  avatar?: { shape: string | null; color: string | null; hasPhoto?: boolean } | null;
+  main?: boolean;
+  computerPhase?: string | null;
 }
+
+/** Computer phases in which Grok Bot has parked the Bot's computer. */
+const ASLEEP_PHASES = new Set(['away', 'asleep']);
 
 /** `grokbot read --json` / `watch --json` message. */
 interface BridgeMessage {
@@ -134,7 +145,14 @@ export class BridgeSource implements BotSource {
 
   async openBot(id: string): Promise<void> {
     if (!this.known.has(id)) throw new Error('No such bot.');
-    // The bridge can't select a conversation yet (that needs the fork, M5); bring the app forward.
+    if (!this.connected) throw new NotConnectedError();
+    try {
+      const out = parseJson(await this.run(['open', id, '--json']));
+      if (isObject(out) && (out.selected === true || out.focused === true)) return;
+    } catch (err) {
+      // The upstream bridge has no `open`: fall back to bringing the app forward.
+      if (!(err instanceof Error) || !/Unknown command/i.test(err.message)) throw err;
+    }
     if (process.platform !== 'darwin') throw new Error('Opening Grok Bot from the office works on macOS only.');
     await new Promise<void>((resolve, reject) => {
       execFile('open', ['-a', 'Grok Bot'], (err) => (err ? reject(new Error("Couldn't bring Grok Bot to the front.")) : resolve()));
@@ -324,10 +342,13 @@ export class BridgeSource implements BotSource {
       this.idByName.set(b.name, b.id);
       const fresh = !this.known.has(b.id);
       this.known.add(b.id);
+      const looks = b.avatar ? avatarFromApp(b.avatar.shape, b.avatar.color) : undefined;
       this.sink?.updateBot(b.id, {
         name: b.name,
         description: b.description,
         unread: b.unread,
+        ...(looks ? { avatar: looks.avatar, ...(looks.color ? { color: looks.color } : {}) } : {}),
+        ...(typeof b.main === 'boolean' ? { main: b.main } : {}),
         ...(initial || fresh
           ? {
               activity: firstLine(b.preview ?? '') || (b.needsInput ? 'Waiting for you in Grok Bot' : ''),
@@ -335,11 +356,13 @@ export class BridgeSource implements BotSource {
                 working: b.running,
                 needsInput: b.needsInput,
                 error: false,
-                computerAsleep: false,
+                computerAsleep: isAsleep(b),
                 lastReplyAt: b.lastActivity ?? undefined,
               },
             }
-          : {}),
+          : typeof b.computerPhase === 'string'
+            ? { signals: { computerAsleep: isAsleep(b) } }
+            : {}),
       });
       if (fresh && !initial) this.scheduleRead(b.id);
     }
@@ -429,6 +452,10 @@ function isWatchEvent(v: unknown): v is WatchEvent {
   if (!isObject(v) || !isStr(v.bot)) return false;
   if (v.type === 'message') return isMessage(v);
   return v.type === 'working' || v.type === 'idle' || v.type === 'needs_input';
+}
+
+function isAsleep(b: BridgeBot): boolean {
+  return typeof b.computerPhase === 'string' && ASLEEP_PHASES.has(b.computerPhase);
 }
 
 function isErrorKind(kind: string | undefined): boolean {

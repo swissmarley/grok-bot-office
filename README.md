@@ -21,7 +21,7 @@ swapped for an httpOnly cookie and removed from the address bar).
 - Web UI (Vite): `127.0.0.1:5173`, proxied to the server.
 - State on disk in `~/.grok-office/`: `desks.json` (stable desks) and `roles.json`
   (roles you edited); mock mode uses `desks.mock.json` and `roles.mock.json`.
-- Names like "Bob - Chief of Staff" show as Bob, with role Chief of Staff.
+- Names like "Ada - Chief of Staff" show as Ada, with role Chief of Staff.
 
 Mock options (environment variables):
 
@@ -63,6 +63,10 @@ The server sends `X-Frame-Options: DENY` and a strict Content-Security-Policy
 Requirements: the Grok Bot desktop app signed in with at least one Bot, and
 [grokbot-bridge](https://github.com/TheSethRose/grokbot-bridge) installed so that
 `grokbot` is on your PATH (macOS; `GROKBOT_BIN` points elsewhere).
+
+For avatars, the main bot, sleeping computers and opening a conversation from the office,
+install the office fork instead (see `bridge-fork/README.md`); with the upstream bridge those
+degrade to defaults.
 
 ```sh
 npm install -g https://github.com/TheSethRose/grokbot-bridge/archive/refs/heads/main.tar.gz

@@ -1,0 +1,713 @@
+From a45fc23bf852ea6e16bb122b6c49363dc4263f88 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 12:42:46 +0000
+Subject: [PATCH] feat: office adapter for avatars, main Bot, computer phase
+ and open
+
+Adds src/adapter/grokbot-internals.ts, the one place for the app internals
+Grok Bot Office uses beyond the upstream commands (seen in Grok Bot 0.78.1):
+avatarShape/avatarColor on Bot-list rows, the mainAgent store, the Bot
+computer phase, and the selection/desktop stores to show a conversation.
+
+- bots --json adds avatar, main and computerPhase (plain list if unreadable)
+- open <bot>: select the conversation and focus the window, on request only
+- internals: which pieces the running app still exposes
+- bun test: the adapter's page code against a fake 0.78.1 renderer
+---
+ README.md                             |  10 ++
+ dist/cli.js                           | 227 +++++++++++++++++++-------
+ package.json                          |   1 +
+ src/adapter/grokbot-internals.test.ts | 121 ++++++++++++++
+ src/adapter/grokbot-internals.ts      | 122 ++++++++++++++
+ src/cli.ts                            |  48 +++++-
+ tsconfig.json                         |   3 +-
+ 7 files changed, 474 insertions(+), 58 deletions(-)
+ create mode 100644 src/adapter/grokbot-internals.test.ts
+ create mode 100644 src/adapter/grokbot-internals.ts
+
+diff --git a/README.md b/README.md
+index 0aba210..1a1c9ab 100644
+--- a/README.md
++++ b/README.md
+@@ -107,6 +107,16 @@ $ grokbot watch --json
+ {"type":"idle","bot":"Chief","at":"2026-10-19T04:40:33.275Z"}
+ ```
+ 
++### Office adapter (this fork)
++
++This fork adds what [Grok Bot Office](https://github.com/swissmarley/grok-bot-office) needs, with every app store and field name in `src/adapter/grokbot-internals.ts`:
++
++- `grokbot bots --json` also gives each Bot's `avatar` (`shape`, `color`, `hasPhoto`), whether it is the `main` Bot, and the Bot computer's `computerPhase`. If the adapter can't read them, the plain list still works.
++- `grokbot open <bot>` shows that Bot's conversation and brings Grok Bot to the front, like clicking it in the sidebar. Focusing the window wakes the Bot's computer, so use it only when the user asks.
++- `grokbot internals` reports which of these pieces the current app version still exposes (`--json` for scripts).
++
++`bun test` runs the adapter against a fake renderer shaped like Grok Bot 0.78.1.
++
+ ## Use it from your agent
+ 
+ ### MCP (Claude Code, Cursor, Codex and others)
+diff --git a/dist/cli.js b/dist/cli.js
+index 7176b1d..d2a6893 100755
+--- a/dist/cli.js
++++ b/dist/cli.js
+@@ -1,5 +1,126 @@
+ #!/usr/bin/env node
+ 
++// src/page.ts
++function contextValue(test) {
++  return `(() => {
++    for (const start of [document.querySelector(".sand-agent-item[data-agent-id]"), document.querySelector("button")]) {
++      const key = start && Object.keys(start).find((k) => k.startsWith("__reactFiber"));
++      for (let f = key ? start[key] : null; f; f = f.return) {
++        const v = f.memoizedProps && f.memoizedProps.value;
++        if (v && typeof v === "object" && (${test})) return v;
++      }
++    }
++    return null;
++  })()`;
++}
++function store(name, method) {
++  const n = JSON.stringify(name);
++  return `(${contextValue(`v[${n}] && typeof v[${n}][${JSON.stringify(method)}] === "function"`)} || {})[${n}] || null`;
++}
++var ACCOUNT_SLOT = `(${contextValue(`typeof v.accountSlot === "string"`)} || {}).accountSlot || null`;
++var BOX_PHASE = `((${contextValue(`v.boxHostPhase && v.boxHostPhase.snapshots && typeof v.boxHostPhase.snapshots.get === "function"`)} || {}).boxHostPhase || { snapshots: { get: () => null } }).snapshots.get()`;
++var PAGE_ERROR = `(e) => {
++  const f = e && e.failure;
++  if (f && f.code === "sand-box-blocked" && /PARK/.test(f.sandBoxBlockReason || ""))
++    return "Grok Bot has put the Bot's computer to sleep because its window hasn't been in front for 10 minutes (" + f.sandBoxBlockReason + "). This change needs the computer, so it will work after you next open Grok Bot.";
++  if (f && f.code) return f.code + (e.message && e.message !== f.code ? ": " + e.message : "");
++  return String((e && e.message) || e);
++}`;
++var PAGE_AWAKE = `async (id, fn) => {
++  for (let i = 0; ; i++) {
++    await Promise.resolve(window.desktop?.main?.signalBoxIntent?.({ agentId: id, intent: "composer_focus" })).catch(() => {});
++    try { return await fn(); } catch (e) {
++      const f = e && e.failure;
++      // Away-park lasts until the Grok Bot window is in front again, so retrying won't help.
++      if (i >= 8 || !(f && f.code === "sand-box-blocked") || f.sandBoxBlockReason === "SAND_AWAY_PARK") throw e;
++      await new Promise((s) => setTimeout(s, 1500));
++    }
++  }
++}`;
++
++// src/adapter/grokbot-internals.ts
++var NAMES = {
++  roster: {
++    store: "roster",
++    method: "createAgent",
++    avatarShape: "avatarShape",
++    avatarColor: "avatarColor",
++    photo: ["avatarPhoto", "avatarDataUrl"]
++  },
++  mainAgent: { store: "mainAgent", method: "ensureDefault" },
++  selection: { store: "selection", method: "select", current: "readCurrentAgentId" },
++  desktop: { store: "desktop", method: "focusWindow" }
++};
++var N = JSON.stringify(NAMES);
++var STORES = `
++  const NAMES = ${N};
++  const roster = ${store(NAMES.roster.store, NAMES.roster.method)};
++  const mainAgent = ${store(NAMES.mainAgent.store, NAMES.mainAgent.method)};
++  const selection = ${store(NAMES.selection.store, NAMES.selection.method)};
++  const desktop = ${store(NAMES.desktop.store, NAMES.desktop.method)};
++  const mainId = () => {
++    try { const s = mainAgent && mainAgent.snapshots.get(); return (s && s.value && s.value.agentId) || null; } catch { return null; }
++  };
++  const phase = () => { try { const p = ${BOX_PHASE}; return typeof p === "string" ? p : null; } catch { return null; } };
++`;
++var PAGE_OFFICE_INFO = `async () => {${STORES}
++  if (!roster) throw new Error("Couldn't reach Grok Bot's Bot list.");
++  const f = NAMES.roster;
++  const main = mainId();
++  const rows = roster.snapshots.get().agents.rows.filter((r) => !r.isGroup);
++  return {
++    computerPhase: phase(),
++    profiles: rows.map((r) => ({
++      id: r.id,
++      avatar: f.avatarShape in r || f.avatarColor in r
++        ? { shape: typeof r[f.avatarShape] === "string" ? r[f.avatarShape] : null,
++            color: typeof r[f.avatarColor] === "string" ? r[f.avatarColor] : null,
++            hasPhoto: f.photo.some((k) => !!r[k]) }
++        : null,
++      main: !!main && r.id === main,
++    })),
++  };
++}`;
++var PAGE_INTERNALS = `async () => {${STORES}
++  const rows = roster ? roster.snapshots.get().agents.rows.filter((r) => !r.isGroup) : [];
++  const m = /GrokBot\\/([\\d.]+)/.exec(navigator.userAgent);
++  return {
++    appVersion: m ? m[1] : null,
++    checks: {
++      roster: !!roster,
++      avatars: rows.length > 0 && rows.every((r) => typeof r[NAMES.roster.avatarShape] === "string"),
++      mainAgent: !!mainId(),
++      computerPhase: phase() !== null,
++      selection: !!selection && typeof selection[NAMES.selection.current] === "function",
++      focusWindow: !!desktop && typeof desktop[NAMES.desktop.method] === "function",
++    },
++  };
++}`;
++var PAGE_OPEN = `async (id) => {${STORES}
++  if (!selection) throw new Error("Couldn't reach Grok Bot's conversation selection. This app version may have changed.");
++  const current = () => { try { return selection[NAMES.selection.current](); } catch { return null; } };
++  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
++  // The argument shape isn't documented: try the id, then { agentId }.
++  for (const arg of [id, { agentId: id }]) {
++    try { await selection[NAMES.selection.method](arg); } catch {}
++    for (let i = 0; i < 10 && current() !== id; i++) await pause(50);
++    if (current() === id) break;
++  }
++  const selected = current() === id;
++  let focused = false;
++  if (desktop) { try { await desktop[NAMES.desktop.method](); focused = true; } catch {} }
++  return { selected, focused };
++}`;
++async function officeInfo(cdp) {
++  return cdp.call(PAGE_OFFICE_INFO);
++}
++async function internalsCheck(cdp) {
++  return cdp.call(PAGE_INTERNALS);
++}
++async function openConversation(cdp, id) {
++  return cdp.call(PAGE_OPEN, id);
++}
++
+ // src/app.ts
+ import { execFile, spawn } from "node:child_process";
+ import { existsSync } from "node:fs";
+@@ -182,46 +303,6 @@ async function restore() {
+ // src/bot.ts
+ import { mkdir, open as openFile, readFile, stat } from "node:fs/promises";
+ import { basename, extname, join as join2, resolve } from "node:path";
+-
+-// src/page.ts
+-function contextValue(test) {
+-  return `(() => {
+-    for (const start of [document.querySelector(".sand-agent-item[data-agent-id]"), document.querySelector("button")]) {
+-      const key = start && Object.keys(start).find((k) => k.startsWith("__reactFiber"));
+-      for (let f = key ? start[key] : null; f; f = f.return) {
+-        const v = f.memoizedProps && f.memoizedProps.value;
+-        if (v && typeof v === "object" && (${test})) return v;
+-      }
+-    }
+-    return null;
+-  })()`;
+-}
+-function store(name, method) {
+-  const n = JSON.stringify(name);
+-  return `(${contextValue(`v[${n}] && typeof v[${n}][${JSON.stringify(method)}] === "function"`)} || {})[${n}] || null`;
+-}
+-var ACCOUNT_SLOT = `(${contextValue(`typeof v.accountSlot === "string"`)} || {}).accountSlot || null`;
+-var BOX_PHASE = `((${contextValue(`v.boxHostPhase && v.boxHostPhase.snapshots && typeof v.boxHostPhase.snapshots.get === "function"`)} || {}).boxHostPhase || { snapshots: { get: () => null } }).snapshots.get()`;
+-var PAGE_ERROR = `(e) => {
+-  const f = e && e.failure;
+-  if (f && f.code === "sand-box-blocked" && /PARK/.test(f.sandBoxBlockReason || ""))
+-    return "Grok Bot has put the Bot's computer to sleep because its window hasn't been in front for 10 minutes (" + f.sandBoxBlockReason + "). This change needs the computer, so it will work after you next open Grok Bot.";
+-  if (f && f.code) return f.code + (e.message && e.message !== f.code ? ": " + e.message : "");
+-  return String((e && e.message) || e);
+-}`;
+-var PAGE_AWAKE = `async (id, fn) => {
+-  for (let i = 0; ; i++) {
+-    await Promise.resolve(window.desktop?.main?.signalBoxIntent?.({ agentId: id, intent: "composer_focus" })).catch(() => {});
+-    try { return await fn(); } catch (e) {
+-      const f = e && e.failure;
+-      // Away-park lasts until the Grok Bot window is in front again, so retrying won't help.
+-      if (i >= 8 || !(f && f.code === "sand-box-blocked") || f.sandBoxBlockReason === "SAND_AWAY_PARK") throw e;
+-      await new Promise((s) => setTimeout(s, 1500));
+-    }
+-  }
+-}`;
+-
+-// src/bot.ts
+ var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+ var LIB = `
+   const roster = ${store("roster", "createAgent")};
+@@ -718,10 +799,10 @@ var PAGE_ROUTINES = `async (op, id, arg) => {
+ function asleepMessage(bot, phase) {
+   return `${bot}'s computer is asleep (Grok Bot phase "${phase}"), so Grok Bot can't show its routines right now. It wakes the next time you open Grok Bot. Routine changes still work: they go through the Bot.`;
+ }
+-async function pageOp(cdp, op2, bot, arg) {
+-  const r = await cdp.call(PAGE_ROUTINES, op2, bot.id, arg ?? null);
++async function pageOp(cdp, op, bot, arg) {
++  const r = await cdp.call(PAGE_ROUTINES, op, bot.id, arg ?? null);
+   if (r.asleep !== undefined) {
+-    throw new Error(op2 === "run" ? `${bot.name}'s computer is asleep, and Bots can't start a routine on demand. It will run on its schedule, or run this again after you next open Grok Bot.` : asleepMessage(bot.name, r.asleep));
++    throw new Error(op === "run" ? `${bot.name}'s computer is asleep, and Bots can't start a routine on demand. It will run on its schedule, or run this again after you next open Grok Bot.` : asleepMessage(bot.name, r.asleep));
+   }
+   if (r.error !== undefined)
+     throw new Error(r.error);
+@@ -1036,11 +1117,11 @@ async function callTool(name, args) {
+     case "grokbot_create_bot":
+       return withApp((c) => createBot(c, { name: str("name"), description: opt("description") }));
+     case "grokbot_update_bot": {
+-      const name2 = opt("name");
++      const name = opt("name");
+       const description = opt("description");
+-      if (name2 === undefined && description === undefined)
++      if (name === undefined && description === undefined)
+         throw new Error('Pass "name" or "description" to change.');
+-      return withApp((c) => updateBot(c, str("bot"), { name: name2, description }));
++      return withApp((c) => updateBot(c, str("bot"), { name, description }));
+     }
+     case "grokbot_delete_bot":
+       if (str("confirm") !== str("bot"))
+@@ -1117,7 +1198,9 @@ Usage:
+   grokbot routines enable|disable <bot> <routine>   Ask the Bot to turn a routine on or off
+   grokbot routines remove <bot> <routine> --yes   Ask the Bot to delete a routine (exact name or id)
+   grokbot routines run <bot> <routine>   Run a routine now (needs its computer awake)
+-  grokbot bots                      List your Bots and what each is doing
++  grokbot bots                      List your Bots and what each is doing (--json adds avatar, main and computerPhase)
++  grokbot open <bot>                Show the Bot's conversation and bring Grok Bot to the front
++  grokbot internals                 Check which app internals the office adapter can reach
+   grokbot create <name>             Create a Bot (--description <text>)
+   grokbot update <bot>              Rename a Bot or change its description (--name, --description)
+   grokbot delete <bot> --yes        Permanently delete a Bot (exact name or id)
+@@ -1283,7 +1366,21 @@ ${formatUsage(s.usage)}` : ""}`);
+       }
+     }
+     case "bots": {
+-      const bots = await withApp2(listBots);
++      const { bots, extra } = await withApp2(async (c) => {
++        const list = await listBots(c);
++        const info = flags.json ? await officeInfo(c).catch(() => null) : null;
++        return { bots: list, extra: info };
++      });
++      if (flags.json && extra) {
++        const byId = new Map(extra.profiles.map((p) => [p.id, p]));
++        const merged = bots.map((b) => ({
++          ...b,
++          avatar: byId.get(b.id)?.avatar ?? null,
++          main: byId.get(b.id)?.main ?? false,
++          computerPhase: extra.computerPhase
++        }));
++        return out(merged, () => "");
++      }
+       return out(bots, () => bots.map((b) => {
+         const state = [
+           b.needsInput ? "needs your input" : b.running ? "working" : "idle",
+@@ -1379,9 +1476,9 @@ ${formatUsage(s.usage)}` : ""}`);
+       if (!bot)
+         throw new Error("Usage: grokbot routines <bot> | routines add|run|enable|disable|remove <bot> ...");
+       if (action === "list") {
+-        const r2 = await withApp2((c) => listRoutines(c, bot));
+-        return out(r2, () => r2.routines.length ? r2.routines.map(formatRoutine).join(`
+-`) : `${r2.bot} has no routines.`);
++        const r = await withApp2((c) => listRoutines(c, bot));
++        return out(r, () => r.routines.length ? r.routines.map(formatRoutine).join(`
++`) : `${r.bot} has no routines.`);
+       }
+       const timing = {
+         timeoutMs: positiveNumber(flags.timeout, "timeout", 300) * 1000,
+@@ -1394,8 +1491,8 @@ ${formatUsage(s.usage)}` : ""}`);
+         const prompt = str(flags.prompt) === "-" ? await readMessage(["-"]) : str(flags.prompt);
+         if (!name || !schedule || !prompt)
+           throw new Error('Usage: grokbot routines add <bot> --name <name> --schedule "<cron>" --prompt <text> [--disabled]');
+-        const r2 = await withApp2((c) => changeRoutine(c, bot, "add", { name, schedule, prompt, enabled: !flags.disabled }, timing));
+-        return printChange(r2, "Added", !!flags.json);
++        const r = await withApp2((c) => changeRoutine(c, bot, "add", { name, schedule, prompt, enabled: !flags.disabled }, timing));
++        return printChange(r, "Added", !!flags.json);
+       }
+       const routine = rest.join(" ").trim();
+       if (!routine)
+@@ -1403,12 +1500,32 @@ ${formatUsage(s.usage)}` : ""}`);
+       if (action === "remove" && !flags.yes)
+         throw new Error(`This permanently deletes the routine "${routine}". Run again with --yes to confirm.`);
+       if (action === "run") {
+-        const r2 = await withApp2((c) => runRoutine(c, bot, routine));
+-        return out(r2, () => `Started ${r2.routine.name} for ${r2.bot}. Run \`grokbot wait ${r2.bot}\` for the result.`);
++        const r = await withApp2((c) => runRoutine(c, bot, routine));
++        return out(r, () => `Started ${r.routine.name} for ${r.bot}. Run \`grokbot wait ${r.bot}\` for the result.`);
+       }
+       const r = await withApp2((c) => changeRoutine(c, bot, action, routine, timing));
+       return printChange(r, { enable: "Turned on", disable: "Turned off", remove: "Deleted" }[action], !!flags.json);
+     }
++    case "open": {
++      const bot = args.join(" ").trim();
++      if (!bot)
++        throw new Error("Usage: grokbot open <bot>");
++      const r = await withApp2(async (c) => {
++        const b = await findBot(c, bot);
++        return { bot: b.name, ...await openConversation(c, b.id) };
++      });
++      if (!r.selected && !r.focused)
++        process.exitCode = 1;
++      return out(r, () => r.selected ? `Opened ${r.bot} in Grok Bot.` : r.focused ? `Brought Grok Bot to the front, but couldn't select ${r.bot}.` : `Couldn't open ${r.bot}.`);
++    }
++    case "internals": {
++      const r = await withApp2(internalsCheck);
++      return out(r, () => [
++        `Grok Bot ${r.appVersion ?? "(version unknown)"}`,
++        ...Object.entries(r.checks).map(([k, ok]) => `${ok ? "ok  " : "FAIL"} ${k}`)
++      ].join(`
++`));
++    }
+     case "stop": {
+       const bot = args.join(" ").trim();
+       if (!bot)
+diff --git a/package.json b/package.json
+index 6295bbc..ba78179 100644
+--- a/package.json
++++ b/package.json
+@@ -19,6 +19,7 @@
+     "build": "bun build src/cli.ts --target=node --outfile=dist/cli.js && chmod +x dist/cli.js",
+     "dev": "bun src/cli.ts",
+     "check": "tsc --noEmit && biome check .",
++    "test": "bun test",
+     "format": "biome check --write ."
+   },
+   "keywords": [
+diff --git a/src/adapter/grokbot-internals.test.ts b/src/adapter/grokbot-internals.test.ts
+new file mode 100644
+index 0000000..3750b35
+--- /dev/null
++++ b/src/adapter/grokbot-internals.test.ts
+@@ -0,0 +1,121 @@
++// Runs the adapter's page code against a fake Grok Bot renderer shaped like 0.78.1.
++// If an app update renames a store or field, update the fake and NAMES together:
++// these tests say which piece no longer matches.
++import { afterEach, beforeEach, describe, expect, test } from "bun:test";
++import { PAGE_INTERNALS, PAGE_OFFICE_INFO, PAGE_OPEN } from "./grokbot-internals.ts";
++
++type Row = Record<string, unknown>;
++
++function fakeApp(opts: { rows?: Row[]; mainId?: string | null; phase?: string; selection?: boolean; selectTakes?: "id" | "object" } = {}) {
++  const calls: string[] = [];
++  let current: string | null = null;
++  const rows = opts.rows ?? [
++    {
++      id: "a",
++      name: "Ada - Chief of Staff",
++      isGroup: false,
++      avatarShape: "blob",
++      avatarColor: "black",
++      avatarPhoto: null,
++      avatarDataUrl: null,
++    },
++    {
++      id: "b",
++      name: "Rui - The Rent Scout",
++      isGroup: false,
++      avatarShape: "heart",
++      avatarColor: "red",
++      avatarPhoto: null,
++      avatarDataUrl: "data:image/png;base64,xx",
++    },
++    { id: "g", name: "Group", isGroup: true },
++  ];
++  const ctx: Record<string, unknown> = {
++    roster: { createAgent: () => calls.push("createAgent"), snapshots: { get: () => ({ agents: { rows } }) } },
++    mainAgent: {
++      ensureDefault: () => calls.push("ensureDefault"),
++      snapshots: { get: () => ({ status: "ready", value: opts.mainId === null ? null : { agentId: opts.mainId ?? "a" } }) },
++    },
++    boxHostPhase: { snapshots: { get: () => opts.phase ?? "settled" } },
++    desktop: { focusWindow: async () => void calls.push("focusWindow") },
++  };
++  if (opts.selection !== false) {
++    ctx.selection = {
++      select: async (arg: unknown) => {
++        calls.push(`select ${JSON.stringify(arg)}`);
++        const takesObject = opts.selectTakes === "object";
++        if (takesObject && typeof arg === "object" && arg) current = (arg as { agentId: string }).agentId;
++        if (!takesObject && typeof arg === "string") current = arg;
++      },
++      readCurrentAgentId: () => current,
++    };
++  }
++  const el = { __reactFiber$x: { memoizedProps: {}, return: { memoizedProps: { value: ctx }, return: null } } };
++  const g = globalThis as Record<string, unknown>;
++  g.document = { querySelector: (sel: string) => (sel.startsWith(".sand-agent-item") ? el : null) };
++  g.navigator = { userAgent: "Mozilla/5.0 (Macintosh) GrokBot/0.78.1 Chrome/148 Electron/42" };
++  return { calls };
++}
++
++// Indirect eval, like CDP's Runtime.evaluate: the page code sees only globals.
++// biome-ignore lint/security/noGlobalEval: page code is evaluated as CDP would
++const pageEval = globalThis.eval;
++const run = <T>(fn: string, ...args: unknown[]): Promise<T> => pageEval(`(${fn})`)(...args);
++
++let saved: Record<string, unknown>;
++beforeEach(() => {
++  const g = globalThis as Record<string, unknown>;
++  saved = { document: g.document, navigator: g.navigator };
++});
++afterEach(() => Object.assign(globalThis, saved));
++
++describe("office info", () => {
++  test("reads avatars, the main Bot and the computer phase", async () => {
++    fakeApp({ phase: "away" });
++    const info = await run<{ computerPhase: string; profiles: unknown[] }>(PAGE_OFFICE_INFO);
++    expect(info.computerPhase).toBe("away");
++    expect(info.profiles).toEqual([
++      { id: "a", avatar: { shape: "blob", color: "black", hasPhoto: false }, main: true },
++      { id: "b", avatar: { shape: "heart", color: "red", hasPhoto: true }, main: false },
++    ]);
++  });
++
++  test("gives null avatars instead of failing when the fields are gone", async () => {
++    fakeApp({ rows: [{ id: "a", name: "Ada", isGroup: false }], mainId: null });
++    const info = await run<{ profiles: unknown[] }>(PAGE_OFFICE_INFO);
++    expect(info.profiles).toEqual([{ id: "a", avatar: null, main: false }]);
++  });
++});
++
++describe("internals check", () => {
++  test("all pieces present", async () => {
++    fakeApp();
++    expect(await run(PAGE_INTERNALS)).toEqual({
++      appVersion: "0.78.1",
++      checks: { roster: true, avatars: true, mainAgent: true, computerPhase: true, selection: true, focusWindow: true },
++    });
++  });
++
++  test("names the piece that changed", async () => {
++    fakeApp({ rows: [{ id: "a", name: "Ada", isGroup: false }], selection: false });
++    const r = await run<{ checks: Record<string, boolean> }>(PAGE_INTERNALS);
++    expect(r.checks.avatars).toBe(false);
++    expect(r.checks.selection).toBe(false);
++    expect(r.checks.roster).toBe(true);
++  });
++});
++
++describe("open", () => {
++  test.each(["id", "object"] as const)("selects the conversation (select takes %s) and focuses the window", async (selectTakes) => {
++    const { calls } = fakeApp({ selectTakes });
++    expect(await run(PAGE_OPEN, "b")).toEqual({ selected: true, focused: true });
++    expect(calls.at(-1)).toBe("focusWindow");
++  });
++
++  test("never creates, edits or answers anything", async () => {
++    const { calls } = fakeApp();
++    await run(PAGE_OFFICE_INFO);
++    await run(PAGE_INTERNALS);
++    expect(calls).toEqual([]);
++  });
++});
+diff --git a/src/adapter/grokbot-internals.ts b/src/adapter/grokbot-internals.ts
+new file mode 100644
+index 0000000..a3e7bf4
+--- /dev/null
++++ b/src/adapter/grokbot-internals.ts
+@@ -0,0 +1,122 @@
++// Grok Bot internals used by Grok Bot Office on top of the upstream bridge: each Bot's
++// avatar, the main Bot, the Bot computer's phase, and opening a conversation in the app.
++// Every store and field name the office relies on lives in this file, so an app update
++// breaks it in one place. `internals` (CLI) reports which pieces still work; callers
++// degrade instead of failing when one doesn't.
++// Seen in Grok Bot 0.78.1.
++import type { CDP } from "../cdp.ts";
++import { BOX_PHASE, store } from "../page.ts";
++
++/** Store and field names, in one place. */
++export const NAMES = {
++  roster: {
++    store: "roster",
++    method: "createAgent",
++    avatarShape: "avatarShape",
++    avatarColor: "avatarColor",
++    photo: ["avatarPhoto", "avatarDataUrl"],
++  },
++  mainAgent: { store: "mainAgent", method: "ensureDefault" },
++  selection: { store: "selection", method: "select", current: "readCurrentAgentId" },
++  desktop: { store: "desktop", method: "focusWindow" },
++} as const;
++
++export type OfficeProfile = {
++  id: string;
++  avatar: { shape: string | null; color: string | null; hasPhoto: boolean } | null;
++  main: boolean;
++};
++
++export type OfficeInfo = {
++  profiles: OfficeProfile[];
++  /** Bot computer phase: "settled", "waking", "following", "away", "asleep"…; null if unknown. */
++  computerPhase: string | null;
++};
++
++export type InternalsCheck = {
++  appVersion: string | null;
++  checks: Record<"roster" | "avatars" | "mainAgent" | "computerPhase" | "selection" | "focusWindow", boolean>;
++};
++
++const N = JSON.stringify(NAMES);
++
++/** Page-side: finds a store through the bridge's lookup, by name and one of its methods. */
++const STORES = `
++  const NAMES = ${N};
++  const roster = ${store(NAMES.roster.store, NAMES.roster.method)};
++  const mainAgent = ${store(NAMES.mainAgent.store, NAMES.mainAgent.method)};
++  const selection = ${store(NAMES.selection.store, NAMES.selection.method)};
++  const desktop = ${store(NAMES.desktop.store, NAMES.desktop.method)};
++  const mainId = () => {
++    try { const s = mainAgent && mainAgent.snapshots.get(); return (s && s.value && s.value.agentId) || null; } catch { return null; }
++  };
++  const phase = () => { try { const p = ${BOX_PHASE}; return typeof p === "string" ? p : null; } catch { return null; } };
++`;
++
++export const PAGE_OFFICE_INFO = `async () => {${STORES}
++  if (!roster) throw new Error("Couldn't reach Grok Bot's Bot list.");
++  const f = NAMES.roster;
++  const main = mainId();
++  const rows = roster.snapshots.get().agents.rows.filter((r) => !r.isGroup);
++  return {
++    computerPhase: phase(),
++    profiles: rows.map((r) => ({
++      id: r.id,
++      avatar: f.avatarShape in r || f.avatarColor in r
++        ? { shape: typeof r[f.avatarShape] === "string" ? r[f.avatarShape] : null,
++            color: typeof r[f.avatarColor] === "string" ? r[f.avatarColor] : null,
++            hasPhoto: f.photo.some((k) => !!r[k]) }
++        : null,
++      main: !!main && r.id === main,
++    })),
++  };
++}`;
++
++export const PAGE_INTERNALS = `async () => {${STORES}
++  const rows = roster ? roster.snapshots.get().agents.rows.filter((r) => !r.isGroup) : [];
++  const m = /GrokBot\\/([\\d.]+)/.exec(navigator.userAgent);
++  return {
++    appVersion: m ? m[1] : null,
++    checks: {
++      roster: !!roster,
++      avatars: rows.length > 0 && rows.every((r) => typeof r[NAMES.roster.avatarShape] === "string"),
++      mainAgent: !!mainId(),
++      computerPhase: phase() !== null,
++      selection: !!selection && typeof selection[NAMES.selection.current] === "function",
++      focusWindow: !!desktop && typeof desktop[NAMES.desktop.method] === "function",
++    },
++  };
++}`;
++
++/**
++ * Shows the Bot's conversation and brings the Grok Bot window to the front, as clicking
++ * the Bot in the sidebar would. Only for an explicit request from the user: focusing the
++ * window also wakes the Bot's computer.
++ */
++export const PAGE_OPEN = `async (id) => {${STORES}
++  if (!selection) throw new Error("Couldn't reach Grok Bot's conversation selection. This app version may have changed.");
++  const current = () => { try { return selection[NAMES.selection.current](); } catch { return null; } };
++  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
++  // The argument shape isn't documented: try the id, then { agentId }.
++  for (const arg of [id, { agentId: id }]) {
++    try { await selection[NAMES.selection.method](arg); } catch {}
++    for (let i = 0; i < 10 && current() !== id; i++) await pause(50);
++    if (current() === id) break;
++  }
++  const selected = current() === id;
++  let focused = false;
++  if (desktop) { try { await desktop[NAMES.desktop.method](); focused = true; } catch {} }
++  return { selected, focused };
++}`;
++
++export async function officeInfo(cdp: CDP): Promise<OfficeInfo> {
++  return cdp.call<OfficeInfo>(PAGE_OFFICE_INFO);
++}
++
++export async function internalsCheck(cdp: CDP): Promise<InternalsCheck> {
++  return cdp.call<InternalsCheck>(PAGE_INTERNALS);
++}
++
++export async function openConversation(cdp: CDP, id: string): Promise<{ selected: boolean; focused: boolean }> {
++  return cdp.call(PAGE_OPEN, id);
++}
+diff --git a/src/cli.ts b/src/cli.ts
+index 0a33ac4..39a6bbb 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -1,9 +1,11 @@
+ #!/usr/bin/env node
++import { internalsCheck, officeInfo, openConversation } from "./adapter/grokbot-internals.ts";
+ import { launch, restore } from "./app.ts";
+ import {
+   ask,
+   type BotEvent,
+   download,
++  findBot,
+   listBots,
+   type Message,
+   read,
+@@ -37,7 +39,9 @@ Usage:
+   grokbot routines enable|disable <bot> <routine>   Ask the Bot to turn a routine on or off
+   grokbot routines remove <bot> <routine> --yes   Ask the Bot to delete a routine (exact name or id)
+   grokbot routines run <bot> <routine>   Run a routine now (needs its computer awake)
+-  grokbot bots                      List your Bots and what each is doing
++  grokbot bots                      List your Bots and what each is doing (--json adds avatar, main and computerPhase)
++  grokbot open <bot>                Show the Bot's conversation and bring Grok Bot to the front
++  grokbot internals                 Check which app internals the office adapter can reach
+   grokbot create <name>             Create a Bot (--description <text>)
+   grokbot update <bot>              Rename a Bot or change its description (--name, --description)
+   grokbot delete <bot> --yes        Permanently delete a Bot (exact name or id)
+@@ -203,7 +207,22 @@ async function main() {
+       }
+     }
+     case "bots": {
+-      const bots = await withApp(listBots);
++      const { bots, extra } = await withApp(async (c) => {
++        const list = await listBots(c);
++        // Office extras; the plain list still works if the adapter can't read them.
++        const info = flags.json ? await officeInfo(c).catch(() => null) : null;
++        return { bots: list, extra: info };
++      });
++      if (flags.json && extra) {
++        const byId = new Map(extra.profiles.map((p) => [p.id, p]));
++        const merged = bots.map((b) => ({
++          ...b,
++          avatar: byId.get(b.id)?.avatar ?? null,
++          main: byId.get(b.id)?.main ?? false,
++          computerPhase: extra.computerPhase,
++        }));
++        return out(merged, () => "");
++      }
+       return out(bots, () =>
+         bots
+           .map((b) => {
+@@ -324,6 +343,31 @@ async function main() {
+       const r = await withApp((c) => changeRoutine(c, bot, action as RoutineChange, routine, timing));
+       return printChange(r, { enable: "Turned on", disable: "Turned off", remove: "Deleted" }[action as "enable"], !!flags.json);
+     }
++    case "open": {
++      const bot = args.join(" ").trim();
++      if (!bot) throw new Error("Usage: grokbot open <bot>");
++      const r = await withApp(async (c) => {
++        const b = await findBot(c, bot);
++        return { bot: b.name, ...(await openConversation(c, b.id)) };
++      });
++      if (!r.selected && !r.focused) process.exitCode = 1;
++      return out(r, () =>
++        r.selected
++          ? `Opened ${r.bot} in Grok Bot.`
++          : r.focused
++            ? `Brought Grok Bot to the front, but couldn't select ${r.bot}.`
++            : `Couldn't open ${r.bot}.`,
++      );
++    }
++    case "internals": {
++      const r = await withApp(internalsCheck);
++      return out(r, () =>
++        [
++          `Grok Bot ${r.appVersion ?? "(version unknown)"}`,
++          ...Object.entries(r.checks).map(([k, ok]) => `${ok ? "ok  " : "FAIL"} ${k}`),
++        ].join("\n"),
++      );
++    }
+     case "stop": {
+       const bot = args.join(" ").trim();
+       if (!bot) throw new Error("Usage: grokbot stop <bot>");
+diff --git a/tsconfig.json b/tsconfig.json
+index 3a73ef1..75e1b05 100644
+--- a/tsconfig.json
++++ b/tsconfig.json
+@@ -10,5 +10,6 @@
+     "lib": ["ES2023", "DOM"],
+     "types": ["node"]
+   },
+-  "include": ["src"]
++  "include": ["src"],
++  "exclude": ["src/**/*.test.ts"]
+ }
+-- 
+2.43.0
+

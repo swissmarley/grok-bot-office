@@ -164,7 +164,7 @@ export class OfficeState {
   }
 
   /**
-   * "Bob - Chief of Staff" → name Bob, role Chief of Staff. Role: the one you set in
+   * "Ada - Chief of Staff" → name Ada, role Chief of Staff. Role: the one you set in
    * the office, else the part after the dash, else the description's first word.
    */
   private applyNaming(entry: Entry): void {

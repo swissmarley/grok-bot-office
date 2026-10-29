@@ -48,7 +48,7 @@ describe('bot naming', () => {
 
   it('flags the main bot', () => {
     const { state, bot } = setup();
-    state.sink.updateBot('a', { name: 'Bob', main: true });
+    state.sink.updateBot('a', { name: 'Ada', main: true });
     expect(bot('a').main).toBe(true);
     state.sink.updateBot('a', { main: false });
     expect(bot('a').main).toBeUndefined();

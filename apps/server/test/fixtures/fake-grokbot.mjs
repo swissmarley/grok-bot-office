@@ -6,6 +6,7 @@
 //   events.jsonl   lines that `watch --json` streams as they are appended
 //   calls.log      every invocation, with the GROKBOT_APP it got
 //   watch-ready    written once `watch` is streaming
+//   fork           exists to act as the office fork of the bridge (has `open`)
 import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -34,6 +35,10 @@ switch (cmd) {
     console.log(existsSync(file) ? readFileSync(file, 'utf8') : JSON.stringify({ bot: args[0], messages: [] }));
     break;
   }
+  case 'open':
+    if (!existsSync(join(dir, 'fork'))) fail(`Unknown command "open".`);
+    console.log(JSON.stringify({ bot: args[0], selected: true, focused: true }));
+    break;
   case 'stop':
     console.log(JSON.stringify({ bot: args[0], stopped: true }));
     break;

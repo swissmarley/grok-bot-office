@@ -167,6 +167,32 @@ describe('BridgeSource', () => {
   });
 });
 
+describe('BridgeSource with the office fork', () => {
+  it('takes avatars, the main bot and a sleeping computer from bots --json', async () => {
+    const { dir, state, source, bot, events } = setup();
+    writeFileSync(
+      join(dir, 'bots.json'),
+      JSON.stringify(
+        BOTS.map((b, i) => ({ ...b, avatar: i === 0 ? { shape: 'blob', color: 'black', hasPhoto: false } : { shape: 'heart', color: 'red' }, main: i === 0, computerPhase: 'away' })),
+      ),
+    );
+    await source.start(state.sink);
+    await until(() => events.some((e) => e.type === 'connection' && e.state === 'connected'));
+    expect(bot('b1')).toMatchObject({ avatar: { shape: 'blob' }, color: '#FFFFFF', main: true, status: 'sleeping' });
+    expect(bot('c1')).toMatchObject({ avatar: { shape: 'heart' }, color: '#FF263C' });
+    expect(bot('c1')?.main).toBeUndefined();
+  });
+
+  it('opens the conversation with `grokbot open`', async () => {
+    const { dir, state, source, events, calls } = setup();
+    writeFileSync(join(dir, 'fork'), '');
+    await source.start(state.sink);
+    await until(() => events.some((e) => e.type === 'connection' && e.state === 'connected'));
+    await source.openBot('c1');
+    expect(calls()).toContainEqual(expect.objectContaining({ cmd: 'open', args: ['c1', '--json'] }));
+  });
+});
+
 describe('parseStep', () => {
   it.each([
     ['Step 2 of 4: drafting', { index: 2, total: 4 }],
