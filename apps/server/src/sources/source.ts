@@ -1,4 +1,4 @@
-import type { Approval, BotAvatar, Task } from '@grok-office/shared';
+import type { Approval, ApprovalDecision, ApprovalResult, BotAvatar, Task } from '@grok-office/shared';
 
 /** Kind of the tool a working bot is using, when the source can tell. */
 export type ToolKind = 'editor' | 'file' | 'git' | 'browser' | 'shell';
@@ -55,4 +55,9 @@ export interface BotSource {
   openBot(id: string): Promise<void>;
   /** Drops and re-establishes the link to Grok Bot. */
   reconnect(): Promise<void>;
+  /**
+   * Answers one card the way its button in the app would; resolves with how it ended. Only
+   * for a decision listed in `approval.decisions`, and only on a click in the office.
+   */
+  resolveApproval(approval: Approval, decision: ApprovalDecision): Promise<ApprovalResult>;
 }

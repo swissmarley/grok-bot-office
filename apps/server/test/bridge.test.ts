@@ -299,6 +299,54 @@ describe('BridgeSource tool steps', () => {
   });
 });
 
+describe('BridgeSource cards', () => {
+  const review = { kind: 'approval', entryId: 'e1', type: 'auto-review-approval', at: '2026-10-29T20:00:00.000Z', summary: 'Run a command on your Mac', target: 'ls ~', details: { command: 'ls ~' }, decisions: ['allow_once', 'deny'] };
+  const draft = { kind: 'draft', entryId: 'd1', type: 'email-draft', at: null, summary: 'Send email', target: 'you@x.com', details: { subject: 'Hi' }, decisions: ['discard'] };
+
+  async function started() {
+    const ctx = setup();
+    writeFileSync(join(ctx.dir, 'fork'), '');
+    await ctx.source.start(ctx.state.sink);
+    await until(() => ctx.events.some((e) => e.type === 'connection' && e.state === 'connected'));
+    await ctx.toolsWatching();
+    const cards = (list: object[], settled: object[] = []) =>
+      appendFileSync(join(ctx.dir, 'tools.jsonl'), JSON.stringify({ type: 'cards', bot: 'Ada', id: 'b1', cards: list, settled, at: new Date().toISOString() }) + '\n');
+    return { ...ctx, cards };
+  }
+
+  it('shows a pending card as an approval with its decisions, and answers it with `grokbot resolve`', async () => {
+    const { source, state, bot, cards, calls, events } = await started();
+    cards([review]);
+    await until(() => bot('b1')?.approval);
+    expect(bot('b1')).toMatchObject({ status: 'needs_you', approval: { id: 'b1:e1', action: 'Run a command on your Mac', target: 'ls ~', kind: 'approval', decisions: ['allow_once', 'deny'], origin: 'chat' } });
+    expect(await source.resolveApproval(state.approval('b1:e1')!, 'deny')).toBe('denied');
+    expect(calls()).toContainEqual(expect.objectContaining({ cmd: 'resolve', args: ['b1', 'e1', 'deny', '--json'] }));
+    expect(bot('b1')?.approval).toBeUndefined();
+    expect(events).toContainEqual({ type: 'approval.resolved', id: 'b1:e1', result: 'denied' });
+  });
+
+  it('ends a card answered in the app with how the app settled it, then shows the next', async () => {
+    const { bot, cards, events } = await started();
+    cards([draft]);
+    await until(() => bot('b1')?.approval?.kind === 'draft');
+    cards([review], [{ entryId: 'd1', result: 'denied' }]);
+    await until(() => bot('b1')?.approval?.id === 'b1:e1');
+    expect(events).toContainEqual({ type: 'approval.resolved', id: 'b1:d1', result: 'denied' });
+    cards([], [{ entryId: 'e1', result: 'allowed' }]);
+    await until(() => !bot('b1')?.approval);
+    expect(events).toContainEqual({ type: 'approval.resolved', id: 'b1:e1', result: 'allowed' });
+  });
+
+  it('refuses a decision the card does not offer and a card already answered in the app', async () => {
+    const { dir, source, state, bot, cards } = await started();
+    cards([draft]);
+    await until(() => bot('b1')?.approval);
+    await expect(source.resolveApproval(state.approval('b1:d1')!, 'allow_once')).rejects.toThrow(/can't be answered/);
+    writeFileSync(join(dir, 'resolve.json'), JSON.stringify({ bot: 'Ada', entryId: 'd1', result: 'gone' }));
+    await expect(source.resolveApproval(state.approval('b1:d1')!, 'discard')).rejects.toThrow(/already answered/);
+  });
+});
+
 describe('parseStep', () => {
   it.each([
     ['Step 2 of 4: drafting', { index: 2, total: 4 }],

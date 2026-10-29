@@ -1,4 +1,4 @@
-import { AVATAR_COLORS, type Approval, type BotAvatar, type Task } from '@grok-office/shared';
+import { AVATAR_COLORS, type Approval, type ApprovalDecision, type ApprovalResult, type BotAvatar, type Task } from '@grok-office/shared';
 import type { Thresholds } from '../config.js';
 import type { BotSignals, BotSource, SourceSink, ToolKind } from './source.js';
 
@@ -229,6 +229,19 @@ export class MockSource implements BotSource {
     this.misc.clear();
   }
 
+  async resolveApproval(approval: Approval, decision: ApprovalDecision): Promise<ApprovalResult> {
+    const run = this.runs.get(approval.botId);
+    const sink = this.sink;
+    if (!run || !sink || run.approvalId !== approval.id) throw new Error('That card is no longer waiting.');
+    if (decision === 'discard') throw new Error("This card can't be discarded.");
+    run.approvalId = undefined;
+    const result: ApprovalResult = decision === 'allow_once' ? 'allowed' : 'denied';
+    sink.approvalResolved(approval.id, result);
+    sink.activity(approval.botId, `${result === 'allowed' ? 'Allowed once' : 'Denied'} from the office: ${approval.action}`);
+    sink.updateBot(approval.botId, { signals: { needsInput: false } });
+    return result;
+  }
+
   async stopBot(id: string): Promise<void> {
     const run = this.runs.get(id);
     const sink = this.sink;
@@ -345,9 +358,13 @@ export class MockSource implements BotSource {
         const ms = phase.origin === 'chat' ? this.jitter(phase.ms ?? 15_000) : this.opts.thresholds.approvalTtlMs;
         if (phase.origin !== 'chat') approval.expiresAt = new Date(createdAt.getTime() + ms).toISOString();
         sink.updateBot(id, { activity: `Waiting for you: ${phase.action}`, signals: { working: false, needsInput: true } });
+        approval.kind = 'approval';
+        approval.decisions = ['allow_once', 'deny'];
         sink.approvalRequested(approval);
         run.approvalId = approval.id;
         this.after(run, ms - 50, () => {
+          // Already answered from the office.
+          if (run.approvalId !== approval.id) return;
           run.approvalId = undefined;
           if (phase.origin === 'chat') {
             // Mock stand-in for you answering the card in the Grok Bot app (approvals V1).

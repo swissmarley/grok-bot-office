@@ -1,0 +1,667 @@
+From 4573aa60a42cf7116b99136c5e708a9ee7aa172c Mon Sep 17 00:00:00 2001
+From: Nakya <nakya@Mac-mini-di-Nakya.local>
+Date: Thu, 29 Oct 2026 21:56:14 +0100
+Subject: [PATCH 4/4] feat: cards and resolve for Auto Review approvals and
+ email drafts
+
+cards <bot> lists the cards waiting on you; resolve answers one with the app's
+own action: Allow once / Deny through resolveAutoReviewApproval, Discard through
+discardDraft. It re-reads the card first and refuses decisions the card doesn't
+offer, always-allow, takeovers and settled cards; drafts are never sent.
+office-watch streams the cards and how recent ones ended.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ README.md                             |   1 +
+ dist/cli.js                           | 133 ++++++++++++++++++++++
+ src/adapter/grokbot-internals.test.ts | 145 +++++++++++++++++++++++-
+ src/adapter/grokbot-internals.ts      | 153 +++++++++++++++++++++++++-
+ src/cli.ts                            |  42 ++++++-
+ 5 files changed, 471 insertions(+), 3 deletions(-)
+
+diff --git a/README.md b/README.md
+index 99a84fa..29462f5 100644
+--- a/README.md
++++ b/README.md
+@@ -114,6 +114,7 @@ This fork adds what [Grok Bot Office](https://github.com/swissmarley/grok-bot-of
+ - `grokbot bots --json` also gives each Bot's `avatar` (`shape`, `color`, `hasPhoto`), whether it is the `main` Bot, and the Bot computer's `computerPhase`. If the adapter can't read them, the plain list still works.
+ - `grokbot open <bot>` shows that Bot's conversation and brings Grok Bot to the front, like clicking it in the sidebar. Focusing the window wakes the Bot's computer, so use it only when the user asks.
+ - `grokbot office-watch` streams, as JSON lines, the tool each Bot is using (`browser`, `shell`, `file`, `editor`, or `null` while thinking or idle). Bots that write their own status line ("cercando sul web") expose only that text, passed on as `status`. `bots --json` carries the same `tool`, `toolName` and `status`. It also says when a Bot's question with options is waiting for your answer (`{"type":"question","open":true}`), which the app itself doesn't count as waiting on you.
++- `grokbot cards <bot>` lists the cards waiting on you (Auto Review approvals, email drafts, and ones only the app can answer); `grokbot resolve <bot> <entry> allow_once|deny|discard` answers one through the same action as its button. It re-reads the card first and refuses anything the card doesn't offer; it never uses "always allow" and never sends a draft. `office-watch` also streams `{"type":"cards"}` when a Bot's cards change.
+ - `grokbot internals` reports which of these pieces the current app version still exposes (`--json` for scripts).
+ 
+ `bun test` runs the adapter against a fake renderer shaped like Grok Bot 0.78.1.
+diff --git a/dist/cli.js b/dist/cli.js
+index 091833f..b5fcdd1 100755
+--- a/dist/cli.js
++++ b/dist/cli.js
+@@ -463,6 +463,19 @@ var NAMES = {
+     widgetType: "widget",
+     answered: ["respondedValue", "widgetSkipped", "widgetDismissed"]
+   },
++  cards: {
++    autoReview: {
++      type: "auto-review-approval",
++      pending: "pending",
++      method: "resolveAutoReviewApproval",
++      platform: "desktop",
++      resolution: { allow_once: "approved", deny: "denied" },
++      settled: { approved: "allowed", always: "allowed", denied: "denied", expired: "expired" },
++      stale: "stale"
++    },
++    draft: { types: ["email-draft"], state: "draftSendState", discard: "discardDraft", settled: { sent: "allowed", discarded: "denied" } },
++    takeover: ["virtual-card-approval", "publish-approval", "cookie-origin-approval", "meeting-join-consent", "connector-grant"]
++  },
+   mainAgent: { store: "mainAgent", method: "ensureDefault" },
+   selection: { store: "selection", method: "select", current: "readCurrentAgentId" },
+   desktop: { store: "desktop", method: "focusWindow" }
+@@ -488,6 +501,48 @@ var STORES = `
+     }
+     return false;
+   };
++  const short = (v, n = 300) => (typeof v === "string" && v.trim() ? (v.trim().length > n ? v.trim().slice(0, n - 1) + "…" : v.trim()) : null);
++  const isoMs = (ms) => (typeof ms === "number" && ms > 0 ? new Date(ms).toISOString() : null);
++  /** Pending cards of a Bot (newest last) and how recent ones ended. */
++  const cardsOf = (id) => {
++    const C = NAMES.cards, cards = [], settled = [];
++    let entries;
++    try { entries = transcript[NAMES.transcript.method](id).get().entries || []; } catch { return { cards, settled }; }
++    for (const e of entries.slice(-60)) {
++      if (e.kind !== NAMES.transcript.entryKind || !e.message) continue;
++      const t = e.message.type, at = isoMs(e.timestampMs);
++      if (t === C.autoReview.type) {
++        const a = e.message.approval || {};
++        if (a.status !== C.autoReview.pending) {
++          if (C.autoReview.settled[a.status]) settled.push({ entryId: e.id, result: C.autoReview.settled[a.status] });
++          continue;
++        }
++        let copy = a.summaryCopy;
++        if (typeof copy === "string") { try { copy = JSON.parse(copy); } catch { copy = null; } }
++        const params = (copy && typeof copy === "object" && copy.params && typeof copy.params === "object") ? copy.params : {};
++        const details = {};
++        for (const [k, v] of [["kind", copy && copy.kind], ["surface", a.surface], ["command", a.command], ["description", params.description], ["workingDirectory", params.workingDirectory]]) {
++          const x = short(v, 500); if (x) details[k] = x;
++        }
++        const summary = short(a.summary), target = short(a.command) || short(params.workingDirectory) || short(a.surface);
++        cards.push({ kind: "approval", entryId: e.id, type: t, at: isoMs(a.createdAtMs) || at, summary, target, details,
++          decisions: summary && target && typeof a.requestId === "string" ? ["allow_once", "deny"] : [] });
++      } else if (C.draft.types.includes(t)) {
++        const state = e[C.draft.state];
++        if (state != null) { if (C.draft.settled[state]) settled.push({ entryId: e.id, result: C.draft.settled[state] }); continue; }
++        const d = e.message.draft || {};
++        const to = Array.isArray(d.to) ? d.to.filter((x) => typeof x === "string").join(", ") : short(d.to);
++        const details = {};
++        for (const [k, v] of [["from", d.from], ["subject", d.subject], ["body", d.body]]) { const x = short(v, 2000); if (x) details[k] = x; }
++        cards.push({ kind: "draft", entryId: e.id, type: t, at, summary: "Send email", target: to || null, details, decisions: to ? ["discard"] : [] });
++      } else if (C.takeover.includes(t)) {
++        const a = e.message.approval || e.message.ask;
++        if (!a || a.status !== C.autoReview.pending) continue;
++        cards.push({ kind: "takeover", entryId: e.id, type: t, at, summary: short(a.summary || a.title) || t, target: null, details: {}, decisions: [] });
++      }
++    }
++    return { cards, settled };
++  };
+   const mainId = () => {
+     try { const s = mainAgent && mainAgent.snapshots.get(); return (s && s.value && s.value.agentId) || null; } catch { return null; }
+   };
+@@ -568,6 +623,7 @@ var PAGE_TOOL_WATCH = `async (beat, sink) => {${STORES}
+   const emit = (ev) => { try { if (typeof window[sink] === "function") window[sink](JSON.stringify(ev)); } catch {} };
+   const last = new Map();
+   const asked = new Map();
++  const cardKeys = new Map();
+   const released = new Map();
+   let finish;
+   const finished = new Promise((resolve) => { finish = resolve; });
+@@ -582,6 +638,13 @@ var PAGE_TOOL_WATCH = `async (beat, sink) => {${STORES}
+         last.set(r.id, key);
+         emit({ type: "tool", bot: r.name, id: r.id, ...t, at });
+       }
++      if (transcript) {
++        const c = cardsOf(r.id), ckey = JSON.stringify(c.cards);
++        if (cardKeys.get(r.id) !== ckey) {
++          cardKeys.set(r.id, ckey);
++          emit({ type: "cards", bot: r.name, id: r.id, ...c, at });
++        }
++      }
+       const open = transcript ? openQuestion(r.id) : false;
+       if (asked.get(r.id) !== open) {
+         asked.set(r.id, open);
+@@ -614,6 +677,50 @@ var PAGE_TOOL_WATCH = `async (beat, sink) => {${STORES}
+   delete g.ticks[beat];
+   delete g[beat];
+ }`;
++var PAGE_CARDS = `async (id) => {${STORES}
++  if (!transcript) throw new Error("Couldn't reach Grok Bot's conversations. This app version may have changed.");
++  const q = NAMES.transcript;
++  const stop = transcript[q.observe](id, () => {});
++  try {
++    if (transcript[q.method](id).get().loadState !== "ready") transcript[q.load](id);
++    for (let i = 0; i < 100 && transcript[q.method](id).get().loadState !== "ready"; i++) await new Promise((r) => setTimeout(r, 150));
++    return cardsOf(id);
++  } finally { if (typeof stop === "function") stop(); }
++}`;
++var PAGE_RESOLVE = `async (agentId, entryId, decision) => {${STORES}
++  if (!transcript) throw new Error("Couldn't reach Grok Bot's conversations. This app version may have changed.");
++  const C = NAMES.cards, q = NAMES.transcript;
++  const stop = transcript[q.observe](agentId, () => {});
++  try {
++    if (transcript[q.method](agentId).get().loadState !== "ready") transcript[q.load](agentId);
++    for (let i = 0; i < 100 && transcript[q.method](agentId).get().loadState !== "ready"; i++) await new Promise((r) => setTimeout(r, 150));
++    const card = cardsOf(agentId).cards.find((c) => c.entryId === entryId);
++    if (!card) return { result: "gone" };
++    if (!card.decisions.includes(decision)) return { error: "This card can't be answered with " + decision + " from outside Grok Bot." };
++    const entry = transcript[q.method](agentId).get().entries.find((e) => e.id === entryId);
++    if (card.kind === "approval") {
++      const a = entry.message.approval;
++      const r = await transcript[C.autoReview.method]({ entryId, requestId: a.requestId, resolution: C.autoReview.resolution[decision], agentId, approvalPlatform: C.autoReview.platform });
++      return { result: r === C.autoReview.stale ? "expired" : decision === "allow_once" ? "allowed" : "denied" };
++    }
++    if (card.kind === "draft" && decision === "discard") {
++      await transcript[C.draft.discard]({ entryId, agentId });
++      return { result: "denied" };
++    }
++    return { error: "Unsupported card." };
++  } catch (e) {
++    return { error: String((e && e.message) || e) };
++  } finally { if (typeof stop === "function") stop(); }
++}`;
++async function cards(cdp, agentId) {
++  return cdp.call(PAGE_CARDS, agentId);
++}
++async function resolveCard(cdp, agentId, entryId, decision) {
++  const r = await cdp.call(PAGE_RESOLVE, agentId, entryId, decision);
++  if (r.error !== undefined || !r.result)
++    throw new Error(r.error ?? "No answer from Grok Bot.");
++  return { result: r.result };
++}
+ async function officeInfo(cdp) {
+   return cdp.call(PAGE_OFFICE_INFO);
+ }
+@@ -1335,6 +1442,8 @@ Usage:
+   grokbot bots                      List your Bots and what each is doing (--json adds avatar, main, tool and computerPhase)
+   grokbot open <bot>                Show the Bot's conversation and bring Grok Bot to the front
+   grokbot office-watch              Stream each Bot's tool (browser, shell, file, editor) or status line, and open questions, as JSON lines
++  grokbot cards <bot>               List the Bot's cards waiting on you (approvals, email drafts) with --json
++  grokbot resolve <bot> <entry> allow_once|deny|discard   Answer one card, like its button in the app
+   grokbot internals                 Check which app internals the office adapter can reach
+   grokbot create <name>             Create a Bot (--description <text>)
+   grokbot update <bot>              Rename a Bot or change its description (--name, --description)
+@@ -1663,6 +1772,30 @@ ${formatUsage(s.usage)}` : ""}`);
+       });
+       return;
+     }
++    case "cards": {
++      const bot = args.join(" ").trim();
++      if (!bot)
++        throw new Error("Usage: grokbot cards <bot> [--json]");
++      const r = await withApp2(async (c) => {
++        const b = await findBot(c, bot);
++        return { bot: b.name, ...await cards(c, b.id) };
++      });
++      return out(r, () => r.cards.length ? r.cards.map((k) => `${k.entryId}  ${k.kind}  ${k.summary ?? k.type}${k.target ? ` → ${k.target}` : ""}  [${k.decisions.join(", ") || "answer in the app"}]`).join(`
++`) : `${r.bot} has no cards waiting.`);
++    }
++    case "resolve": {
++      const [bot, entryId, decision] = args;
++      const decisions = ["allow_once", "deny", "discard"];
++      if (!bot || !entryId || !decisions.includes(decision))
++        throw new Error("Usage: grokbot resolve <bot> <entry> allow_once|deny|discard");
++      const r = await withApp2(async (c) => {
++        const b = await findBot(c, bot);
++        return { bot: b.name, entryId, ...await resolveCard(c, b.id, entryId, decision) };
++      });
++      if (r.result === "gone")
++        process.exitCode = 1;
++      return out(r, () => r.result === "gone" ? "That card is no longer waiting." : `${r.bot}: ${r.result}.`);
++    }
+     case "internals": {
+       const r = await withApp2(internalsCheck);
+       return out(r, () => [
+diff --git a/src/adapter/grokbot-internals.test.ts b/src/adapter/grokbot-internals.test.ts
+index ed3b1b3..793e582 100644
+--- a/src/adapter/grokbot-internals.test.ts
++++ b/src/adapter/grokbot-internals.test.ts
+@@ -2,7 +2,7 @@
+ // If an app update renames a store or field, update the fake and NAMES together:
+ // these tests say which piece no longer matches.
+ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+-import { PAGE_INTERNALS, PAGE_OFFICE_INFO, PAGE_OPEN, PAGE_TOOL_WATCH } from "./grokbot-internals.ts";
++import { PAGE_CARDS, PAGE_INTERNALS, PAGE_OFFICE_INFO, PAGE_OPEN, PAGE_RESOLVE, PAGE_TOOL_WATCH } from "./grokbot-internals.ts";
+ 
+ type Row = Record<string, unknown>;
+ 
+@@ -14,6 +14,7 @@ function fakeApp(
+     selection?: boolean;
+     selectTakes?: "id" | "object";
+     entries?: Record<string, Row[]>;
++    stale?: boolean;
+   } = {},
+ ) {
+   const calls: string[] = [];
+@@ -67,6 +68,12 @@ function fakeApp(
+       }),
+       observeEntries: () => () => {},
+       load: () => calls.push("load"),
++      resolveAutoReviewApproval: async (arg: unknown) => {
++        calls.push(`resolveAutoReviewApproval ${JSON.stringify(arg)}`);
++        return opts.stale ? "stale" : "ok";
++      },
++      discardDraft: async (arg: unknown) => void calls.push(`discardDraft ${JSON.stringify(arg)}`),
++      sendDraft: async () => void calls.push("sendDraft"),
+     },
+     desktop: { focusWindow: async () => void calls.push("focusWindow") },
+   };
+@@ -292,3 +299,139 @@ describe("open questions", () => {
+     delete g.__grokbot;
+   });
+ });
++
++describe("cards", () => {
++  const review = (extra: Row = {}): Row => ({
++    kind: "send-message",
++    id: "e1",
++    timestampMs: 1_000,
++    message: {
++      type: "auto-review-approval",
++      approval: {
++        requestId: "req1",
++        status: "pending",
++        summary: "Run a command on your Mac",
++        command: "rm -rf ~/tmp/cache",
++        surface: "host_shell",
++        summaryCopy: JSON.stringify({ kind: "shell", params: { description: "Clean the cache", workingDirectory: "/Users/x" } }),
++        createdAtMs: 2_000,
++        ...extra,
++      },
++    },
++  });
++  const draft = (extra: Row = {}): Row => ({
++    kind: "send-message",
++    id: "d1",
++    timestampMs: 3_000,
++    message: { type: "email-draft", draft: { from: "me@x.com", to: ["you@x.com"], subject: "Hi", body: "Hello" } },
++    ...extra,
++  });
++  const rows = [{ id: "a", name: "Ada", isGroup: false }];
++
++  test("lists an Auto Review card and an email draft with what they do", async () => {
++    fakeApp({ rows, entries: { a: [review(), draft()] } });
++    const r = await run<{ cards: Record<string, unknown>[] }>(PAGE_CARDS, "a");
++    expect(r.cards).toEqual([
++      {
++        kind: "approval",
++        entryId: "e1",
++        type: "auto-review-approval",
++        at: new Date(2_000).toISOString(),
++        summary: "Run a command on your Mac",
++        target: "rm -rf ~/tmp/cache",
++        details: {
++          kind: "shell",
++          surface: "host_shell",
++          command: "rm -rf ~/tmp/cache",
++          description: "Clean the cache",
++          workingDirectory: "/Users/x",
++        },
++        decisions: ["allow_once", "deny"],
++      },
++      {
++        kind: "draft",
++        entryId: "d1",
++        type: "email-draft",
++        at: new Date(3_000).toISOString(),
++        summary: "Send email",
++        target: "you@x.com",
++        details: { from: "me@x.com", subject: "Hi", body: "Hello" },
++        decisions: ["discard"],
++      },
++    ]);
++  });
++
++  test("no decisions when the card can't be read; settled cards are reported, not listed", async () => {
++    fakeApp({
++      rows,
++      entries: { a: [review({ summary: "", command: null, surface: null, summaryCopy: null }), draft({ draftSendState: "sent" })] },
++    });
++    const r = await run<{ cards: { decisions: unknown[] }[]; settled: unknown[] }>(PAGE_CARDS, "a");
++    expect(r.cards).toHaveLength(1);
++    expect(r.cards[0].decisions).toEqual([]);
++    expect(r.settled).toEqual([{ entryId: "d1", result: "allowed" }]);
++  });
++
++  test("takeover cards have no decisions", async () => {
++    fakeApp({
++      rows,
++      entries: {
++        a: [
++          {
++            kind: "send-message",
++            id: "v1",
++            message: { type: "virtual-card-approval", approval: { status: "pending", summary: "Pay 20 EUR" } },
++          },
++        ],
++      },
++    });
++    const r = await run<{ cards: Record<string, unknown>[] }>(PAGE_CARDS, "a");
++    expect(r.cards[0]).toMatchObject({ kind: "takeover", decisions: [] });
++  });
++
++  test.each([
++    ["allow_once", "approved", "allowed"],
++    ["deny", "denied", "denied"],
++  ])("%s answers through resolveAutoReviewApproval with %s", async (decision, resolution, result) => {
++    const { calls } = fakeApp({ rows, entries: { a: [review()] } });
++    expect(await run(PAGE_RESOLVE, "a", "e1", decision)).toEqual({ result });
++    expect(calls.at(-1)).toBe(
++      `resolveAutoReviewApproval ${JSON.stringify({ entryId: "e1", requestId: "req1", resolution, agentId: "a", approvalPlatform: "desktop" })}`,
++    );
++  });
++
++  test("a card that went stale comes back as expired", async () => {
++    fakeApp({ rows, entries: { a: [review()] }, stale: true });
++    expect(await run(PAGE_RESOLVE, "a", "e1", "allow_once")).toEqual({ result: "expired" });
++  });
++
++  test("discards an email draft and never sends one", async () => {
++    const { calls } = fakeApp({ rows, entries: { a: [draft()] } });
++    expect(await run(PAGE_RESOLVE, "a", "d1", "discard")).toEqual({ result: "denied" });
++    expect(calls.at(-1)).toBe(`discardDraft ${JSON.stringify({ entryId: "d1", agentId: "a" })}`);
++    expect(calls).not.toContain("sendDraft");
++  });
++
++  test("refuses decisions a card doesn't offer, always allow, takeovers and gone cards", async () => {
++    const { calls } = fakeApp({
++      rows,
++      entries: {
++        a: [
++          review(),
++          draft(),
++          { kind: "send-message", id: "v1", message: { type: "virtual-card-approval", approval: { status: "pending" } } },
++        ],
++      },
++    });
++    for (const [entry, decision] of [
++      ["e1", "discard"],
++      ["e1", "always"],
++      ["d1", "allow_once"],
++      ["v1", "allow_once"],
++    ]) {
++      expect(await run<{ error?: string }>(PAGE_RESOLVE, "a", entry, decision)).toHaveProperty("error");
++    }
++    expect(await run(PAGE_RESOLVE, "a", "nope", "deny")).toEqual({ result: "gone" });
++    expect(calls.filter((c) => /resolve|discard|send/i.test(c))).toEqual([]);
++  });
++});
+diff --git a/src/adapter/grokbot-internals.ts b/src/adapter/grokbot-internals.ts
+index 5d06ba0..55f5a35 100644
+--- a/src/adapter/grokbot-internals.ts
++++ b/src/adapter/grokbot-internals.ts
+@@ -73,6 +73,26 @@ export const NAMES = {
+     widgetType: "widget",
+     answered: ["respondedValue", "widgetSkipped", "widgetDismissed"],
+   },
++  /**
++   * Cards that wait on you, as `send-message` entries. An Auto Review card (`auto-review-approval`)
++   * carries `approval` { requestId, status, summary, summaryCopy, command, surface, createdAtMs } and is
++   * answered through `resolveAutoReviewApproval`, as the app's own buttons do. An email draft carries
++   * `draft` { from, to, subject, body } and is open while `draftSendState` is unset; the office may
++   * only discard it (sending stays in the app). Other card types are listed as takeovers.
++   */
++  cards: {
++    autoReview: {
++      type: "auto-review-approval",
++      pending: "pending",
++      method: "resolveAutoReviewApproval",
++      platform: "desktop",
++      resolution: { allow_once: "approved", deny: "denied" },
++      settled: { approved: "allowed", always: "allowed", denied: "denied", expired: "expired" },
++      stale: "stale",
++    },
++    draft: { types: ["email-draft"], state: "draftSendState", discard: "discardDraft", settled: { sent: "allowed", discarded: "denied" } },
++    takeover: ["virtual-card-approval", "publish-approval", "cookie-origin-approval", "meeting-join-consent", "connector-grant"],
++  },
+   mainAgent: { store: "mainAgent", method: "ensureDefault" },
+   selection: { store: "selection", method: "select", current: "readCurrentAgentId" },
+   desktop: { store: "desktop", method: "focusWindow" },
+@@ -109,6 +129,24 @@ export type ToolEvent = {
+   at: string;
+ };
+ 
++/** A card waiting on you. `details` are short readable fields; `decisions` what the office may answer. */
++export type Card = {
++  kind: "approval" | "draft" | "takeover";
++  entryId: string;
++  type: string;
++  at: string | null;
++  summary: string | null;
++  target: string | null;
++  details: Record<string, string>;
++  decisions: Decision[];
++};
++export type Decision = "allow_once" | "deny" | "discard";
++/** How a card the office saw ended, read back from the conversation. */
++export type Settled = { entryId: string; result: "allowed" | "denied" | "expired" };
++
++/** `office-watch` line: the Bot's cards waiting on you changed. */
++export type CardsEvent = { type: "cards"; bot: string; id: string; cards: Card[]; settled: Settled[]; at: string };
++
+ /** `office-watch` line: a question with options from the Bot opened (waiting on your answer in the app) or closed. */
+ export type QuestionEvent = { type: "question"; bot: string; id: string; open: boolean; at: string };
+ 
+@@ -143,6 +181,48 @@ const STORES = `
+     }
+     return false;
+   };
++  const short = (v, n = 300) => (typeof v === "string" && v.trim() ? (v.trim().length > n ? v.trim().slice(0, n - 1) + "…" : v.trim()) : null);
++  const isoMs = (ms) => (typeof ms === "number" && ms > 0 ? new Date(ms).toISOString() : null);
++  /** Pending cards of a Bot (newest last) and how recent ones ended. */
++  const cardsOf = (id) => {
++    const C = NAMES.cards, cards = [], settled = [];
++    let entries;
++    try { entries = transcript[NAMES.transcript.method](id).get().entries || []; } catch { return { cards, settled }; }
++    for (const e of entries.slice(-60)) {
++      if (e.kind !== NAMES.transcript.entryKind || !e.message) continue;
++      const t = e.message.type, at = isoMs(e.timestampMs);
++      if (t === C.autoReview.type) {
++        const a = e.message.approval || {};
++        if (a.status !== C.autoReview.pending) {
++          if (C.autoReview.settled[a.status]) settled.push({ entryId: e.id, result: C.autoReview.settled[a.status] });
++          continue;
++        }
++        let copy = a.summaryCopy;
++        if (typeof copy === "string") { try { copy = JSON.parse(copy); } catch { copy = null; } }
++        const params = (copy && typeof copy === "object" && copy.params && typeof copy.params === "object") ? copy.params : {};
++        const details = {};
++        for (const [k, v] of [["kind", copy && copy.kind], ["surface", a.surface], ["command", a.command], ["description", params.description], ["workingDirectory", params.workingDirectory]]) {
++          const x = short(v, 500); if (x) details[k] = x;
++        }
++        const summary = short(a.summary), target = short(a.command) || short(params.workingDirectory) || short(a.surface);
++        cards.push({ kind: "approval", entryId: e.id, type: t, at: isoMs(a.createdAtMs) || at, summary, target, details,
++          decisions: summary && target && typeof a.requestId === "string" ? ["allow_once", "deny"] : [] });
++      } else if (C.draft.types.includes(t)) {
++        const state = e[C.draft.state];
++        if (state != null) { if (C.draft.settled[state]) settled.push({ entryId: e.id, result: C.draft.settled[state] }); continue; }
++        const d = e.message.draft || {};
++        const to = Array.isArray(d.to) ? d.to.filter((x) => typeof x === "string").join(", ") : short(d.to);
++        const details = {};
++        for (const [k, v] of [["from", d.from], ["subject", d.subject], ["body", d.body]]) { const x = short(v, 2000); if (x) details[k] = x; }
++        cards.push({ kind: "draft", entryId: e.id, type: t, at, summary: "Send email", target: to || null, details, decisions: to ? ["discard"] : [] });
++      } else if (C.takeover.includes(t)) {
++        const a = e.message.approval || e.message.ask;
++        if (!a || a.status !== C.autoReview.pending) continue;
++        cards.push({ kind: "takeover", entryId: e.id, type: t, at, summary: short(a.summary || a.title) || t, target: null, details: {}, decisions: [] });
++      }
++    }
++    return { cards, settled };
++  };
+   const mainId = () => {
+     try { const s = mainAgent && mainAgent.snapshots.get(); return (s && s.value && s.value.agentId) || null; } catch { return null; }
+   };
+@@ -237,6 +317,7 @@ export const PAGE_TOOL_WATCH = `async (beat, sink) => {${STORES}
+   const emit = (ev) => { try { if (typeof window[sink] === "function") window[sink](JSON.stringify(ev)); } catch {} };
+   const last = new Map();
+   const asked = new Map();
++  const cardKeys = new Map();
+   const released = new Map();
+   let finish;
+   const finished = new Promise((resolve) => { finish = resolve; });
+@@ -251,6 +332,13 @@ export const PAGE_TOOL_WATCH = `async (beat, sink) => {${STORES}
+         last.set(r.id, key);
+         emit({ type: "tool", bot: r.name, id: r.id, ...t, at });
+       }
++      if (transcript) {
++        const c = cardsOf(r.id), ckey = JSON.stringify(c.cards);
++        if (cardKeys.get(r.id) !== ckey) {
++          cardKeys.set(r.id, ckey);
++          emit({ type: "cards", bot: r.name, id: r.id, ...c, at });
++        }
++      }
+       const open = transcript ? openQuestion(r.id) : false;
+       if (asked.get(r.id) !== open) {
+         asked.set(r.id, open);
+@@ -284,6 +372,69 @@ export const PAGE_TOOL_WATCH = `async (beat, sink) => {${STORES}
+   delete g[beat];
+ }`;
+ 
++/** A Bot's pending cards and how recent ones ended. */
++export const PAGE_CARDS = `async (id) => {${STORES}
++  if (!transcript) throw new Error("Couldn't reach Grok Bot's conversations. This app version may have changed.");
++  const q = NAMES.transcript;
++  const stop = transcript[q.observe](id, () => {});
++  try {
++    if (transcript[q.method](id).get().loadState !== "ready") transcript[q.load](id);
++    for (let i = 0; i < 100 && transcript[q.method](id).get().loadState !== "ready"; i++) await new Promise((r) => setTimeout(r, 150));
++    return cardsOf(id);
++  } finally { if (typeof stop === "function") stop(); }
++}`;
++
++/**
++ * Answers one card, through the same app action as its buttons: Allow once or Deny for an
++ * Auto Review card, Discard for an email draft. Re-reads the card first and refuses anything
++ * else: a card that is gone, settled, a takeover, or a decision the card doesn't offer.
++ */
++export const PAGE_RESOLVE = `async (agentId, entryId, decision) => {${STORES}
++  if (!transcript) throw new Error("Couldn't reach Grok Bot's conversations. This app version may have changed.");
++  const C = NAMES.cards, q = NAMES.transcript;
++  const stop = transcript[q.observe](agentId, () => {});
++  try {
++    if (transcript[q.method](agentId).get().loadState !== "ready") transcript[q.load](agentId);
++    for (let i = 0; i < 100 && transcript[q.method](agentId).get().loadState !== "ready"; i++) await new Promise((r) => setTimeout(r, 150));
++    const card = cardsOf(agentId).cards.find((c) => c.entryId === entryId);
++    if (!card) return { result: "gone" };
++    if (!card.decisions.includes(decision)) return { error: "This card can't be answered with " + decision + " from outside Grok Bot." };
++    const entry = transcript[q.method](agentId).get().entries.find((e) => e.id === entryId);
++    if (card.kind === "approval") {
++      const a = entry.message.approval;
++      const r = await transcript[C.autoReview.method]({ entryId, requestId: a.requestId, resolution: C.autoReview.resolution[decision], agentId, approvalPlatform: C.autoReview.platform });
++      return { result: r === C.autoReview.stale ? "expired" : decision === "allow_once" ? "allowed" : "denied" };
++    }
++    if (card.kind === "draft" && decision === "discard") {
++      await transcript[C.draft.discard]({ entryId, agentId });
++      return { result: "denied" };
++    }
++    return { error: "Unsupported card." };
++  } catch (e) {
++    return { error: String((e && e.message) || e) };
++  } finally { if (typeof stop === "function") stop(); }
++}`;
++
++export async function cards(cdp: CDP, agentId: string): Promise<{ cards: Card[]; settled: Settled[] }> {
++  return cdp.call(PAGE_CARDS, agentId);
++}
++
++export async function resolveCard(
++  cdp: CDP,
++  agentId: string,
++  entryId: string,
++  decision: Decision,
++): Promise<{ result: "allowed" | "denied" | "expired" | "gone" }> {
++  const r = await cdp.call<{ result?: "allowed" | "denied" | "expired" | "gone"; error?: string }>(
++    PAGE_RESOLVE,
++    agentId,
++    entryId,
++    decision,
++  );
++  if (r.error !== undefined || !r.result) throw new Error(r.error ?? "No answer from Grok Bot.");
++  return { result: r.result };
++}
++
+ export async function officeInfo(cdp: CDP): Promise<OfficeInfo> {
+   return cdp.call<OfficeInfo>(PAGE_OFFICE_INFO);
+ }
+@@ -293,7 +444,7 @@ export async function internalsCheck(cdp: CDP): Promise<InternalsCheck> {
+ }
+ 
+ /** Streams tool and open-question changes for every Bot until the process exits. */
+-export async function officeWatch(cdp: CDP, onEvent: (e: ToolEvent | QuestionEvent) => void): Promise<void> {
++export async function officeWatch(cdp: CDP, onEvent: (e: ToolEvent | QuestionEvent | CardsEvent) => void): Promise<void> {
+   await cdp.send("Runtime.enable");
+   const sink = await cdp.bind((p) => onEvent(JSON.parse(p)));
+   await withHeartbeat(cdp, (beat) => cdp.call(PAGE_TOOL_WATCH, beat, sink));
+diff --git a/src/cli.ts b/src/cli.ts
+index 238f9ee..090962a 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -1,5 +1,13 @@
+ #!/usr/bin/env node
+-import { internalsCheck, officeInfo, officeWatch, openConversation } from "./adapter/grokbot-internals.ts";
++import {
++  cards,
++  type Decision,
++  internalsCheck,
++  officeInfo,
++  officeWatch,
++  openConversation,
++  resolveCard,
++} from "./adapter/grokbot-internals.ts";
+ import { launch, restore } from "./app.ts";
+ import {
+   ask,
+@@ -42,6 +50,8 @@ Usage:
+   grokbot bots                      List your Bots and what each is doing (--json adds avatar, main, tool and computerPhase)
+   grokbot open <bot>                Show the Bot's conversation and bring Grok Bot to the front
+   grokbot office-watch              Stream each Bot's tool (browser, shell, file, editor) or status line, and open questions, as JSON lines
++  grokbot cards <bot>               List the Bot's cards waiting on you (approvals, email drafts) with --json
++  grokbot resolve <bot> <entry> allow_once|deny|discard   Answer one card, like its button in the app
+   grokbot internals                 Check which app internals the office adapter can reach
+   grokbot create <name>             Create a Bot (--description <text>)
+   grokbot update <bot>              Rename a Bot or change its description (--name, --description)
+@@ -370,6 +380,36 @@ async function main() {
+       });
+       return;
+     }
++    case "cards": {
++      const bot = args.join(" ").trim();
++      if (!bot) throw new Error("Usage: grokbot cards <bot> [--json]");
++      const r = await withApp(async (c) => {
++        const b = await findBot(c, bot);
++        return { bot: b.name, ...(await cards(c, b.id)) };
++      });
++      return out(r, () =>
++        r.cards.length
++          ? r.cards
++              .map(
++                (k) =>
++                  `${k.entryId}  ${k.kind}  ${k.summary ?? k.type}${k.target ? ` → ${k.target}` : ""}  [${k.decisions.join(", ") || "answer in the app"}]`,
++              )
++              .join("\n")
++          : `${r.bot} has no cards waiting.`,
++      );
++    }
++    case "resolve": {
++      const [bot, entryId, decision] = args;
++      const decisions: Decision[] = ["allow_once", "deny", "discard"];
++      if (!bot || !entryId || !decisions.includes(decision as Decision))
++        throw new Error("Usage: grokbot resolve <bot> <entry> allow_once|deny|discard");
++      const r = await withApp(async (c) => {
++        const b = await findBot(c, bot);
++        return { bot: b.name, entryId, ...(await resolveCard(c, b.id, entryId, decision as Decision)) };
++      });
++      if (r.result === "gone") process.exitCode = 1;
++      return out(r, () => (r.result === "gone" ? "That card is no longer waiting." : `${r.bot}: ${r.result}.`));
++    }
+     case "internals": {
+       const r = await withApp(internalsCheck);
+       return out(r, () =>
+-- 
+2.50.1 (Apple Git-155)
+

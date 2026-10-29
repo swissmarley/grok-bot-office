@@ -1,6 +1,6 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { avatarFromApp, type Task } from '@grok-office/shared';
+import { avatarFromApp, type Approval, type ApprovalDecision, type ApprovalKind, type ApprovalResult, type Task } from '@grok-office/shared';
 import { config } from '../config.js';
 import { toolFromStatusText } from '../status.js';
 import type { BotSource, BotSignals, SourceSink, ToolKind } from './source.js';
@@ -52,6 +52,26 @@ const TOOL_ACTIVITY: Record<ToolKind, string> = {
   editor: 'Coding',
   git: 'Working with git',
 };
+
+/** A card waiting on you, from `office-watch` (office fork). */
+interface BridgeCard {
+  kind: ApprovalKind;
+  entryId: string;
+  type: string;
+  at: string | null;
+  summary: string | null;
+  target: string | null;
+  details: Record<string, string>;
+  decisions: ApprovalDecision[];
+}
+
+/** `grokbot office-watch` line (office fork): the bot's pending cards, and how recent ones ended. */
+interface CardsEvent {
+  type: 'cards';
+  id: string;
+  cards: BridgeCard[];
+  settled: { entryId: string; result: ApprovalResult }[];
+}
 
 /** `grokbot office-watch` line (office fork): a question with options opened or was answered. */
 interface QuestionEvent {
@@ -121,6 +141,8 @@ export class BridgeSource implements BotSource {
   private readonly idByName = new Map<string, string>();
   private readonly known = new Set<string>();
   private readonly tasks = new Map<string, Task>();
+  /** The card each bot shows in the office: office approval id → the card's conversation entry. */
+  private readonly shown = new Map<string, { approvalId: string; entryId: string }>();
   /** Every grokbot process still running, so stop() can end them all. */
   private readonly children = new Set<ChildProcess>();
 
@@ -283,6 +305,11 @@ export class BridgeSource implements BotSource {
     createInterface({ input: child.stdout! }).on('line', (line) => {
       if (this.toolWatcher !== child) return;
       const e = parseJson(line);
+      if (isCardsEvent(e) && this.known.has(e.id)) {
+        streamed = true;
+        this.onCards(e);
+        return;
+      }
       if (isQuestionEvent(e) && this.known.has(e.id)) {
         streamed = true;
         this.sink?.updateBot(e.id, { signals: { openQuestion: e.open }, ...(e.open ? { activity: 'Waiting for your answer in Grok Bot' } : {}) });
@@ -298,6 +325,11 @@ export class BridgeSource implements BotSource {
       this.toolWatcher = undefined;
       // Don't leave a bot stuck on its last tool.
       for (const id of this.known) this.sink?.updateBot(id, { signals: { tool: null, openQuestion: false } });
+      // Without office-watch the office can't tell when a card ends: drop them, the app still has them.
+      for (const [id, shown] of this.shown) {
+        this.sink?.approvalResolved(shown.approvalId, 'expired');
+        this.shown.delete(id);
+      }
       // It worked before (a hiccup): try again. It never did (upstream bridge): leave it.
       if (streamed && this.connected) {
         this.toolRetryTimer = setTimeout(() => {
@@ -307,6 +339,47 @@ export class BridgeSource implements BotSource {
     };
     child.on('exit', ended);
     child.on('error', ended);
+  }
+
+  /** Shows the bot's oldest pending card; a card that went away ends with how the app settled it. */
+  private onCards(e: CardsEvent): void {
+    const sink = this.sink!;
+    const card = e.cards[0];
+    const shown = this.shown.get(e.id);
+    if (shown && shown.entryId !== card?.entryId) {
+      const result = e.settled.find((s) => s.entryId === shown.entryId)?.result ?? 'expired';
+      sink.approvalResolved(shown.approvalId, result);
+      this.shown.delete(e.id);
+    }
+    if (!card || this.shown.get(e.id)?.entryId === card.entryId) return;
+    const approval: Approval = {
+      id: `${e.id}:${card.entryId}`,
+      botId: e.id,
+      action: card.summary ?? 'Answer in Grok Bot',
+      target: card.target ?? '',
+      inputs: card.details,
+      // The conversation doesn't say whether a routine or a trigger asked: treat it as chat (no countdown).
+      origin: 'chat',
+      createdAt: card.at ?? new Date().toISOString(),
+      kind: card.kind,
+      decisions: card.decisions,
+    };
+    this.shown.set(e.id, { approvalId: approval.id, entryId: card.entryId });
+    sink.approvalRequested(approval);
+  }
+
+  async resolveApproval(approval: Approval, decision: ApprovalDecision): Promise<ApprovalResult> {
+    if (!this.connected) throw new NotConnectedError();
+    const shown = this.shown.get(approval.botId);
+    if (!shown || shown.approvalId !== approval.id) throw new Error('That card is no longer waiting.');
+    if (!approval.decisions?.includes(decision)) throw new Error("This card can't be answered that way from the office.");
+    const out = parseJson(await this.run(['resolve', approval.botId, shown.entryId, decision, '--json']));
+    const result = isObject(out) ? out.result : undefined;
+    if (result === 'gone') throw new Error('That card was already answered in Grok Bot.');
+    if (result !== 'allowed' && result !== 'denied' && result !== 'expired') throw new Error('Unexpected answer from `grokbot resolve`.');
+    this.shown.delete(approval.botId);
+    this.sink?.approvalResolved(approval.id, result);
+    return result;
   }
 
   private onWatchLine(line: string): void {
@@ -537,6 +610,26 @@ const TOOL_KINDS = new Set<string>(['browser', 'shell', 'file', 'editor', 'git']
 
 function isToolKind(v: unknown): v is ToolKind {
   return typeof v === 'string' && TOOL_KINDS.has(v);
+}
+
+const KINDS = new Set(['approval', 'draft', 'takeover']);
+const DECISIONS = new Set(['allow_once', 'deny', 'discard']);
+const RESULTS = new Set(['allowed', 'denied', 'expired']);
+
+function isCard(v: unknown): v is BridgeCard {
+  return (
+    isObject(v) && KINDS.has(v.kind as string) && isStr(v.entryId) && isStr(v.type) &&
+    (v.summary === null || isStr(v.summary)) && (v.target === null || isStr(v.target)) && (v.at === null || isStr(v.at)) &&
+    isObject(v.details) && Object.values(v.details).every(isStr) &&
+    Array.isArray(v.decisions) && v.decisions.every((d) => DECISIONS.has(d as string))
+  );
+}
+
+function isCardsEvent(v: unknown): v is CardsEvent {
+  return (
+    isObject(v) && v.type === 'cards' && isStr(v.id) && Array.isArray(v.cards) && v.cards.every(isCard) &&
+    Array.isArray(v.settled) && v.settled.every((s) => isObject(s) && isStr(s.entryId) && RESULTS.has(s.result as string))
+  );
 }
 
 function isQuestionEvent(v: unknown): v is QuestionEvent {

@@ -18,7 +18,7 @@ le azioni da fare, nell'ordine. La specifica resta `SPEC.md`; questo file dice c
 | M2 Pannelli | ✅ Team, Dettaglio, Activity, toast, bottom sheet mobile, test di coerenza col server |
 | M3 Bridge live | ✅ verificata sul Mac il 29.10.2026 (log in 0,8–1,4 s, riconnessione da sola) |
 | M4 Attività fini | ✅ verificata sul Mac: `office-watch` legge `currentActivity` del roster; i bot con riga di stato (`SetStatus`) si classificano dalle parole (`toolFromStatusText`) |
-| M5 Approvazioni | ✅ V1 verificata (anche le domande con opzioni senza risposta = needs_you, patch 0003); ⏳ V2 da fare **dietro un ok esplicito dell'utente** (passo 5, ricerca sotto) |
+| M5 Approvazioni | ✅ V1 verificata (domande con opzioni senza risposta = needs_you, patch 0003); ✅ V2 con ok dell'utente (proposta A, patch 0004): Allow once/Deny per le card di Auto Review, Discard per le bozze email (verificato dal vivo), nessun pulsante per il resto. Da rifare dal vivo quando compare una vera card `auto-review-approval`. |
 | M6 Rifinitura | ✅ 100 fps con 12 bot sul Mac (`GBO_MOCK_BOTS=12`, `&stats`), README aggiornato |
 
 **Ricerca V2 (Grok Bot 0.78.1, dal codice dell'app):** la card è una voce `send-message` con

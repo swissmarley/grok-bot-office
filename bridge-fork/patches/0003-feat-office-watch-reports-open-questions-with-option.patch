@@ -1,7 +1,7 @@
 From 684b125408a85bd8ab3c20f9e3add84fb4457553 Mon Sep 17 00:00:00 2001
 From: Nakya <nakya@Mac-mini-di-Nakya.local>
 Date: Thu, 29 Oct 2026 21:40:27 +0100
-Subject: [PATCH 3/3] feat: office-watch reports open questions with options
+Subject: [PATCH 3/4] feat: office-watch reports open questions with options
 
 A question with options is a send-message/widget entry; the app doesn't set
 awaitingUserResponse for it, so office-watch follows each conversation and

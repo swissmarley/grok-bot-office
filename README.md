@@ -99,9 +99,13 @@ bot that writes its own status line ("cercando sul web", "eseguendo comandi") is
 those words, which is a best guess and falls back to thinking. A bot shows Needs you when
 Grok Bot waits on you or when it asked you a question with options you haven't answered.
 
-**Approvals:** for now you approve in Grok Bot: the bot's detail has "Apri in Grok Bot",
-which opens its conversation. Allow once / Deny from the office (V2 in SPEC.md) is not
-built yet.
+**Approvals:** select a bot that needs you. The card shows what it would do first, then:
+**Allow once** / **Deny** for Grok Bot's Auto Review cards, **Discard** for an email draft
+(sending a draft stays in Grok Bot), and no buttons for anything else (payments, sign-ins,
+publishing) or when the details aren't readable: "Open in Grok Bot" takes you there.
+"Always allow" and Auto Review rules stay in the app; one click answers one card. Every
+outcome, also expired cards and ones you answered in the app, goes to
+`~/.grok-office/audit.log` (time, bot, action, allowed/denied/expired, office/app).
 
 **Risk of the debug port:** while Grok Bot runs with it, any program on your Mac
 that connects to `127.0.0.1:9333` can act in the app as you. It isn't exposed to the
