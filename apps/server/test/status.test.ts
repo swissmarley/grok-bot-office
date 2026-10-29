@@ -10,6 +10,7 @@ const ago = (min: number) => new Date(now - min * 60_000).toISOString();
 describe('deriveStatus', () => {
   it.each<[string, Partial<BotSignals>, string]>([
     ['needs_input', { needsInput: true, working: true, tool: 'shell' }, 'needs_you'],
+    ['open question after the turn', { openQuestion: true, lastReplyAt: ago(1) }, 'needs_you'],
     ['editor tool', { working: true, tool: 'editor' }, 'coding'],
     ['file tool', { working: true, tool: 'file' }, 'coding'],
     ['git tool', { working: true, tool: 'git' }, 'coding'],

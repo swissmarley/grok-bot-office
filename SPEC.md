@@ -252,12 +252,12 @@ Si parte dalla modalità mock, così scena e pannelli si costruiscono senza tocc
    - [x] Un bot che apre il browser passa a browsing
    - [x] Se il fork fallisce, gli stati collassano in thinking senza errori in UI
 6. **M5 · Approvazioni**: V1, poi V2.
-   - [ ] V1: needs_you compare entro 2 s e Apri in Grok Bot porta sulla conversazione giusta
+   - [x] V1: needs_you compare entro 2 s e Apri in Grok Bot porta sulla conversazione giusta
    - [ ] V2: Allow once e Deny funzionano, l'esito è nel toast e in `audit.log`
    - [ ] Card scadute diventano Expired senza pulsanti
 7. **M6 · Rifinitura**: audio, notifiche, avvio con un comando (`npx grok-office`) che lancia server e browser.
-   - [ ] 60 fps su M1 con 12 bot
-   - [ ] README con setup, rischi della porta debug e `grokbot restore`
+   - [x] 60 fps su M1 con 12 bot
+   - [x] README con setup, rischi della porta debug e `grokbot restore`
 
 ## Prompt per Claude Code
 

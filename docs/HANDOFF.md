@@ -18,8 +18,18 @@ le azioni da fare, nell'ordine. La specifica resta `SPEC.md`; questo file dice c
 | M2 Pannelli | ✅ Team, Dettaglio, Activity, toast, bottom sheet mobile, test di coerenza col server |
 | M3 Bridge live | ✅ verificata sul Mac il 29.10.2026 (log in 0,8–1,4 s, riconnessione da sola) |
 | M4 Attività fini | ✅ verificata sul Mac: `office-watch` legge `currentActivity` del roster; i bot con riga di stato (`SetStatus`) si classificano dalle parole (`toolFromStatusText`) |
-| M5 Approvazioni | ⏳ V1 da verificare, V2 da fare **dietro un ok esplicito dell'utente** (passo 5) |
-| M6 Rifinitura | ✅ `pnpm start`, chime, notifiche, header di sicurezza; ⏳ 60 fps sul Mac (passo 6) |
+| M5 Approvazioni | ✅ V1 verificata (anche le domande con opzioni senza risposta = needs_you, patch 0003); ⏳ V2 da fare **dietro un ok esplicito dell'utente** (passo 5, ricerca sotto) |
+| M6 Rifinitura | ✅ 100 fps con 12 bot sul Mac (`GBO_MOCK_BOTS=12`, `&stats`), README aggiornato |
+
+**Ricerca V2 (Grok Bot 0.78.1, dal codice dell'app):** la card è una voce `send-message` con
+`message.type === 'auto-review-approval'` e `message.approval` (`requestId`, `status`:
+pending/approved/always/denied/expired, `summary`, `summaryCopy`, `command`, `surface`,
+`appliedRules`, `cautionNote`, `createdAtMs`). Si risolve con
+`transcript.resolveAutoReviewApproval({ entryId, requestId, resolution, agentId, approvalPlatform: 'desktop', sessionId? })`:
+Allow once = `'approved'`, Deny = `'denied'` (mai `'always'`); risponde `'stale'` se scaduta.
+`virtual-card-approval`, `publish-approval`, `cookie-origin-approval`, `meeting-join-consent` usano
+altri metodi: per l'ufficio sono "Serve te nell'app". Una card `auto-review-approval` vera non è
+ancora stata vista: le domande con opzioni (`widget`) sono un'altra cosa.
 
 Fork del bridge: **pronto come patch** in `bridge-fork/patches/` (non è stato possibile creare
 il fork su GitHub dalla sessione cloud). Aggiunge `src/adapter/grokbot-internals.ts` con

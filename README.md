@@ -64,23 +64,44 @@ Requirements: the Grok Bot desktop app signed in with at least one Bot, and
 [grokbot-bridge](https://github.com/TheSethRose/grokbot-bridge) installed so that
 `grokbot` is on your PATH (macOS; `GROKBOT_BIN` points elsewhere).
 
-For avatars, the main bot, sleeping computers and opening a conversation from the office,
-install the office fork instead (see `bridge-fork/README.md`); with the upstream bridge those
-degrade to defaults.
+Install the office fork of the bridge: it adds avatars, the main bot, sleeping computers,
+opening a conversation from the office, the tool each bot is using (coding / browsing /
+terminal) and open questions (needs you). It lives as patches in `bridge-fork/patches/`;
+with the upstream bridge those degrade to defaults and working bots show as thinking.
 
 ```sh
-npm install -g https://github.com/TheSethRose/grokbot-bridge/archive/refs/heads/main.tar.gz
+git clone https://github.com/TheSethRose/grokbot-bridge.git ../grokbot-bridge
+cd ../grokbot-bridge && git checkout -b office-adapter b905584
+git am ../grok-bot-office/bridge-fork/patches/*.patch
+bun install && bun test && bun run build
+npm install -g .   # `grokbot` now runs this fork
+cd ../grok-bot-office
+```
+
+Then, each time:
+
+```sh
 grokbot launch     # restarts Grok Bot with the debug port on 127.0.0.1:9333
 pnpm start         # or `pnpm dev` while developing; no --mock: your bots via the bridge
 grokbot restore    # when you're done: restarts Grok Bot normally, closing the port
 ```
 
-The office runs `grokbot status`, `bots --json`, `watch --json`, `read <bot> --json
---limit 20` and `stop <bot>`. It **never starts, quits or restarts Grok Bot**: the
+The office runs `grokbot status`, `bots --json`, `watch --json`, `office-watch`,
+`read <bot> --json --limit 20`, `stop <bot>` and `open <bot>`. It **never starts, quits or restarts Grok Bot**: the
 bridge relaunches the app when it can't reach the port, so the office runs it with
 `GROKBOT_APP` pointing nowhere and that relaunch fails instead. If you close Grok
 Bot, the badge turns Disconnected and the office keeps retrying; it reconnects by
-itself once you run `grokbot launch` again.
+itself once you run `grokbot launch` again. If Grok Bot is running but its window is
+closed, open it from the Dock.
+
+**States:** a bot that names its tools shows as coding, browsing or terminal from them; a
+bot that writes its own status line ("cercando sul web", "eseguendo comandi") is read from
+those words, which is a best guess and falls back to thinking. A bot shows Needs you when
+Grok Bot waits on you or when it asked you a question with options you haven't answered.
+
+**Approvals:** for now you approve in Grok Bot: the bot's detail has "Apri in Grok Bot",
+which opens its conversation. Allow once / Deny from the office (V2 in SPEC.md) is not
+built yet.
 
 **Risk of the debug port:** while Grok Bot runs with it, any program on your Mac
 that connects to `127.0.0.1:9333` can act in the app as you. It isn't exposed to the

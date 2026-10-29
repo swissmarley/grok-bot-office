@@ -53,6 +53,13 @@ const TOOL_ACTIVITY: Record<ToolKind, string> = {
   git: 'Working with git',
 };
 
+/** `grokbot office-watch` line (office fork): a question with options opened or was answered. */
+interface QuestionEvent {
+  type: 'question';
+  id: string;
+  open: boolean;
+}
+
 /** `grokbot office-watch` line (office fork). */
 interface ToolEvent {
   type: 'tool';
@@ -276,6 +283,11 @@ export class BridgeSource implements BotSource {
     createInterface({ input: child.stdout! }).on('line', (line) => {
       if (this.toolWatcher !== child) return;
       const e = parseJson(line);
+      if (isQuestionEvent(e) && this.known.has(e.id)) {
+        streamed = true;
+        this.sink?.updateBot(e.id, { signals: { openQuestion: e.open }, ...(e.open ? { activity: 'Waiting for your answer in Grok Bot' } : {}) });
+        return;
+      }
       if (!isToolEvent(e) || !this.known.has(e.id)) return;
       streamed = true;
       this.sink?.updateBot(e.id, toolUpdate(e.tool, e.status));
@@ -285,7 +297,7 @@ export class BridgeSource implements BotSource {
       if (this.toolWatcher !== child) return;
       this.toolWatcher = undefined;
       // Don't leave a bot stuck on its last tool.
-      for (const id of this.known) this.sink?.updateBot(id, { signals: { tool: null } });
+      for (const id of this.known) this.sink?.updateBot(id, { signals: { tool: null, openQuestion: false } });
       // It worked before (a hiccup): try again. It never did (upstream bridge): leave it.
       if (streamed && this.connected) {
         this.toolRetryTimer = setTimeout(() => {
@@ -525,6 +537,10 @@ const TOOL_KINDS = new Set<string>(['browser', 'shell', 'file', 'editor', 'git']
 
 function isToolKind(v: unknown): v is ToolKind {
   return typeof v === 'string' && TOOL_KINDS.has(v);
+}
+
+function isQuestionEvent(v: unknown): v is QuestionEvent {
+  return isObject(v) && v.type === 'question' && isStr(v.id) && typeof v.open === 'boolean';
 }
 
 function isToolEvent(v: unknown): v is ToolEvent {

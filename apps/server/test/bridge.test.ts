@@ -229,6 +229,24 @@ describe('BridgeSource tool steps', () => {
     await until(() => bot('b1')?.status === 'thinking');
   });
 
+  it('shows an unanswered question as needs_you, even after the turn ends', async () => {
+    const { dir, state, source, bot, event, events, watching, toolsWatching } = setup();
+    writeFileSync(join(dir, 'fork'), '');
+    await source.start(state.sink);
+    await until(() => events.some((e) => e.type === 'connection' && e.state === 'connected'));
+    await watching();
+    await toolsWatching();
+    const q = (open: boolean) =>
+      appendFileSync(join(dir, 'tools.jsonl'), JSON.stringify({ type: 'question', bot: 'Ada', id: 'b1', open, at: new Date().toISOString() }) + '\n');
+    q(true);
+    await until(() => bot('b1')?.status === 'needs_you');
+    event({ type: 'idle', bot: 'Ada - Chief of Staff', at: new Date().toISOString() });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(bot('b1')?.status).toBe('needs_you');
+    q(false);
+    await until(() => bot('b1')?.status !== 'needs_you');
+  });
+
   it("reads the bot's own status line when it hides its tools", async () => {
     const { dir, state, source, bot, event, events, watching, tool, toolsWatching } = setup();
     writeFileSync(join(dir, 'fork'), '');

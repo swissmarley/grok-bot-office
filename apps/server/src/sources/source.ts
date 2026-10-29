@@ -8,6 +8,8 @@ export interface BotSignals {
   working: boolean;
   /** An approval card or an open question is waiting for you. */
   needsInput: boolean;
+  /** The bot asked a question with options that you haven't answered (the app doesn't count it as waiting). */
+  openQuestion?: boolean;
   /** Last tool in use while working; undefined when the source can't see tool steps. */
   tool?: ToolKind | null;
   /** A tool failed or the bot replied with an error; cleared by the source when work resumes. */

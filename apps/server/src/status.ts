@@ -30,7 +30,7 @@ export function toolFromStatusText(text: string | null | undefined): ToolKind | 
 
 /** Signal → office status, as in the mapping table of SPEC.md. */
 export function deriveStatus(s: BotSignals, now: number, t: Thresholds): BotStatus {
-  if (s.needsInput) return 'needs_you';
+  if (s.needsInput || s.openQuestion) return 'needs_you';
   if (s.error) return 'error';
   if (s.working) return s.tool ? TOOL_STATUS[s.tool] : 'thinking';
   if (s.computerAsleep) return 'sleeping';
