@@ -73,7 +73,7 @@ export const AVATAR_SHAPES: readonly AvatarShape[] = [
 /**
  * The 11 avatar colors of the same picker, in its order, by the app's `avatarColor` names
  * where seen. `black` is the picker's first swatch: the app draws it white on its dark
- * theme, and so does the office. brown, pink and gray are our guesses so far.
+ * theme, and so does the office. The app calls pink `magenta`.
  */
 export const AVATAR_COLORS = {
   black: '#FFFFFF',
@@ -91,9 +91,15 @@ export const AVATAR_COLORS = {
 
 export type AvatarColorName = keyof typeof AVATAR_COLORS;
 
+/**
+ * The app has more shapes than its picker shows; a Bot that never picked one gets one of
+ * blob, pebble, squircle, tablet, wedge, hex, cloud, teardrop. The rest map to our closest.
+ */
 const SHAPE_ALIASES: Record<string, AvatarShape> = {
   round: 'blob', circle: 'blob', drop: 'teardrop', triangle: 'wedge', hexagon: 'hex', splat: 'star',
   diamond: 'square', bean: 'pill', capsule: 'pill', house: 'pentagon',
+  pebble: 'blob', egg: 'blob', dome: 'blob', squircle: 'square', tablet: 'pill', cylinder: 'pill',
+  gem: 'hex', crystal: 'hex', shield: 'pentagon', arch: 'pentagon', leaf: 'teardrop',
 };
 const COLOR_ALIASES: Record<string, AvatarColorName> = {
   white: 'black', amber: 'yellow', teal: 'cyan', purple: 'violet', grey: 'gray', magenta: 'pink',

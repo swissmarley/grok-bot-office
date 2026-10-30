@@ -16,6 +16,15 @@ describe('avatarFromApp', () => {
     expect(avatarFromApp(shape, color)).toEqual({ avatar: { shape: ours }, color: hex });
   });
 
+  it.each([
+    ['pebble', 'blob'],
+    ['squircle', 'square'],
+    ['tablet', 'pill'],
+    ['cloud', 'cloud'],
+  ])("maps the app's default shape %s to %s", (shape, ours) => {
+    expect(avatarFromApp(shape, 'magenta')).toEqual({ avatar: { shape: ours }, color: '#FF309B' });
+  });
+
   it('falls back to the blob and the office palette for names it does not know', () => {
     expect(avatarFromApp('dodecahedron', 'ultraviolet')).toEqual({ avatar: { shape: 'blob' } });
     expect(avatarFromApp(null, undefined)).toEqual({ avatar: { shape: 'blob' } });

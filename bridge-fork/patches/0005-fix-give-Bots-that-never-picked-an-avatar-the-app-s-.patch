@@ -1,0 +1,111 @@
+From b9eedf7c2fadecb97cdc8a6eacd3334d0e827120 Mon Sep 17 00:00:00 2001
+From: Nakya <nakya@Mac-mini-di-Nakya.local>
+Date: Fri, 30 Oct 2026 17:01:18 +0100
+Subject: [PATCH] fix: give Bots that never picked an avatar the app's default
+
+The app derives a missing avatarShape/avatarColor from a hash of the Bot's id;
+reproduce it instead of reporting null, and keep the avatars check passing
+when only some rows carry the fields.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/adapter/grokbot-internals.test.ts | 18 ++++++++++++++
+ src/adapter/grokbot-internals.ts      | 35 ++++++++++++++++++++++++---
+ 2 files changed, 49 insertions(+), 4 deletions(-)
+
+diff --git a/src/adapter/grokbot-internals.test.ts b/src/adapter/grokbot-internals.test.ts
+index 793e582..625bcc0 100644
+--- a/src/adapter/grokbot-internals.test.ts
++++ b/src/adapter/grokbot-internals.test.ts
+@@ -122,6 +122,24 @@ describe("office info", () => {
+     ]);
+   });
+ 
++  test("gives a Bot that never picked an avatar the app's default", async () => {
++    fakeApp({
++      rows: [
++        { id: "a", name: "Ada", isGroup: false, avatarShape: "heart", avatarColor: "red" },
++        { id: "n1", name: "New", isGroup: false, avatarShape: null, avatarColor: null },
++        { id: "n2", name: "Newer", isGroup: false },
++        { id: "n4", name: "Odd", isGroup: false, avatarShape: "not-a-shape", avatarColor: "blue" },
++      ],
++    });
++    const info = await run<{ profiles: { avatar: unknown }[] }>(PAGE_OFFICE_INFO);
++    expect(info.profiles.map((p) => p.avatar)).toEqual([
++      { shape: "heart", color: "red", hasPhoto: false },
++      { shape: "tablet", color: "gray", hasPhoto: false },
++      { shape: "squircle", color: "yellow", hasPhoto: false },
++      { shape: "cloud", color: "blue", hasPhoto: false },
++    ]);
++  });
++
+   test("gives null avatars instead of failing when the fields are gone", async () => {
+     fakeApp({ rows: [{ id: "a", name: "Ada", isGroup: false }], mainId: null });
+     const info = await run<{ profiles: unknown[] }>(PAGE_OFFICE_INFO);
+diff --git a/src/adapter/grokbot-internals.ts b/src/adapter/grokbot-internals.ts
+index 55f5a35..8167f6e 100644
+--- a/src/adapter/grokbot-internals.ts
++++ b/src/adapter/grokbot-internals.ts
+@@ -17,6 +17,15 @@ export const NAMES = {
+     avatarShape: "avatarShape",
+     avatarColor: "avatarColor",
+     photo: ["avatarPhoto", "avatarDataUrl"],
++    /** Every shape and color the app accepts; anything else, or none, gets the app's default. */
++    shapes: ["blob", "pebble", "bean", "egg", "squircle", "tablet", "capsule", "cylinder", "hex", "gem", "crystal", "wedge", "shield", "dome", "arch", "cloud", "teardrop", "leaf", "square", "sparkle", "clover", "flower", "heart", "house", "star", "pumpkin"],
++    colors: ["black", "brown", "red", "orange", "yellow", "green", "cyan", "blue", "violet", "magenta", "gray"],
++    /**
++     * A Bot whose avatar was never picked has no shape or color on its row: the app draws one
++     * picked from a hash of its id, a shape from `defaultShapes` and any color but black.
++     */
++    defaultShapes: ["blob", "pebble", "squircle", "tablet", "wedge", "hex", "cloud", "teardrop"],
++    defaultSalt: { shape: 1, color: 1 },
+   },
+   /**
+    * What a working Bot is doing, on its Bot-list row: { kind: "thinking" | "tool", tool, detail, target }.
+@@ -251,13 +260,31 @@ export const PAGE_OFFICE_INFO = `async () => {${STORES}
+   const f = NAMES.roster;
+   const main = mainId();
+   const rows = roster.snapshots.get().agents.rows.filter((r) => !r.isGroup);
++  // The app's default avatar for a Bot that never picked one (the app's own hashes of its id).
++  const fnv = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; };
++  const defaultShape = (id) => {
++    let h = fnv(id) | 0;
++    h = Math.imul(h ^ (h >>> 16), 73244475);
++    h = Math.imul(h ^ (h >>> 13), 3266489909);
++    return f.defaultShapes[((h ^ (h >>> 16)) >>> 0) % f.defaultShapes.length];
++  };
++  const defaultColor = (id) => {
++    const colors = f.colors.filter((c) => c !== "black");
++    let t = (((fnv(id) ^ Math.imul(f.defaultSalt.shape, 2654435769)) >>> 0) ^ Math.imul(f.defaultSalt.color, 2654435769)) >>> 0;
++    t = (t + 1831565813) | 0;
++    let n = Math.imul(t ^ (t >>> 15), 1 | t);
++    n = (n + Math.imul(n ^ (n >>> 7), 61 | n)) ^ n;
++    return colors[Math.floor((((n ^ (n >>> 14)) >>> 0) / 4294967296) * colors.length)];
++  };
++  // No row with the fields at all means the app renamed them: report no avatars rather than guess.
++  const hasFields = rows.some((r) => f.avatarShape in r || f.avatarColor in r);
+   return {
+     computerPhase: phase(),
+     profiles: rows.map((r) => ({
+       id: r.id,
+-      avatar: f.avatarShape in r || f.avatarColor in r
+-        ? { shape: typeof r[f.avatarShape] === "string" ? r[f.avatarShape] : null,
+-            color: typeof r[f.avatarColor] === "string" ? r[f.avatarColor] : null,
++      avatar: hasFields
++        ? { shape: f.shapes.includes(r[f.avatarShape]) ? r[f.avatarShape] : defaultShape(String(r.id)),
++            color: f.colors.includes(r[f.avatarColor]) ? r[f.avatarColor] : defaultColor(String(r.id)),
+             hasPhoto: f.photo.some((k) => !!r[k]) }
+         : null,
+       main: !!main && r.id === main,
+@@ -273,7 +300,7 @@ export const PAGE_INTERNALS = `async () => {${STORES}
+     appVersion: m ? m[1] : null,
+     checks: {
+       roster: !!roster,
+-      avatars: rows.length > 0 && rows.every((r) => typeof r[NAMES.roster.avatarShape] === "string"),
++      avatars: rows.some((r) => typeof r[NAMES.roster.avatarShape] === "string"),
+       mainAgent: !!mainId(),
+       computerPhase: phase() !== null,
+       selection: !!selection && typeof selection[NAMES.selection.current] === "function",
+-- 
+2.50.1 (Apple Git-155)
+
