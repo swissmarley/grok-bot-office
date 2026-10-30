@@ -1,14 +1,58 @@
-# grok-bot-office
+# Grok Bot Office
 
-Local web app that shows your Grok Bot bots as characters in an isometric 3D office,
-with live status and approvals. Full spec: [SPEC.md](SPEC.md).
+**See your Grok Bots at work, in a little 3D office.** Every bot gets a desk, shows what it is
+doing right now, and taps you on the shoulder when it needs you. Approve or deny its actions
+with one click, without digging through logs.
 
-Unofficial project, not affiliated with xAI.
+![The office: one bot in every state, with what each is doing above its head](docs/milestones/m1-all-states-day.png)
 
-## Set up in one command
+> Unofficial project, not affiliated with xAI. It runs only on your Mac, for you.
 
-On a Mac with the Grok Bot desktop app signed in, and Node.js 22+, pnpm 10, Bun and git
-installed:
+## Contents
+
+- [What it does](#what-it-does)
+- [Screenshots](#screenshots)
+- [Quick start](#quick-start)
+- [Using the office](#using-the-office)
+- [Safety](#safety)
+- [Troubleshooting](#troubleshooting)
+- [How it works](#how-it-works)
+- [Development](#development)
+
+## What it does
+
+- 🏢 **Your bots, live.** Each bot from your Grok Bot account sits at its own desk, with its own
+  avatar shape and color, and the main bot wears a star.
+- 👀 **What everyone is doing.** Coding, browsing, in the terminal, thinking, done, idle or
+  asleep: you see it on the bot, its monitor and the Team list.
+- 🙋 **Who needs you.** A bot waiting for an approval or for your answer turns orange, bounces
+  an "!" and can play a chime or send a notification.
+- ✅ **One-click approvals.** **Allow once** or **Deny** an action, or **Discard** an email
+  draft, after seeing exactly what it would do. Every decision is logged.
+- 📋 **Task and activity.** Each bot's current task, its replies with times, and a feed of
+  everything that happened.
+- 🌙 **Day, evening, night**, following your clock or set by hand, and a layout for your phone.
+
+## Screenshots
+
+| A bot's task and log | An approval waiting for you |
+| --- | --- |
+| ![Selected bot with its task, progress and log](docs/milestones/m2-detail.png) | ![Approval card with Allow once and Deny](docs/milestones/m5-approval.jpg) |
+| **Up close: what's on each monitor** | **On your phone** |
+| ![Close-up of bots at their desks in the evening](docs/milestones/m1-closeup-evening.png) | <img src="docs/milestones/m2-mobile.png" alt="Mobile layout with the Team list as a bottom sheet" width="260"> |
+
+The screenshots show the demo bots (`pnpm start --mock`).
+
+## Quick start
+
+### What you need
+
+- A **Mac** with the **Grok Bot** desktop app, signed in, with at least one bot (tested with
+  Grok Bot 0.78.1)
+- **Node.js 22+**, **pnpm 10**, **Bun** and **git**. The setup tells you how to install any that
+  are missing.
+
+### 1. Set up, once
 
 ```sh
 git clone https://github.com/swissmarley/grok-bot-office.git
@@ -16,141 +60,170 @@ cd grok-bot-office
 node scripts/setup.mjs
 ```
 
-It checks the tools (and says how to install a missing one), installs the office, builds the
-office fork of grokbot-bridge from `bridge-fork/patches/` in `~/.grok-office/grokbot-bridge`
-and installs it as `grokbot`. Run it again after pulling to pick up new patches;
-`--bridge-dir <dir>` builds the fork elsewhere, `--no-global` skips installing `grokbot`.
-`pnpm run setup` does the same (not `pnpm setup`, which is a pnpm command of its own). It
-never starts Grok Bot or opens its debug port. Then, each time:
+This installs the office and builds the bridge that talks to the Grok Bot app (the office's
+fork of [grokbot-bridge](https://github.com/TheSethRose/grokbot-bridge)), then installs it as
+the `grokbot` command. It doesn't touch Grok Bot itself. Run it again after a `git pull` to
+update.
+
+### 2. Every time you use it
 
 ```sh
-grokbot launch     # restarts Grok Bot with the debug port on 127.0.0.1:9333
+grokbot launch     # restarts Grok Bot so the office can read it
 pnpm start         # opens the office in your browser
-grokbot restore    # when you're done: closes the debug port
 ```
+
+When you're done:
+
+```sh
+grokbot restore    # restarts Grok Bot normally (see Safety)
+```
+
+### Just want to look?
+
+`pnpm start --mock` opens the office with five demo bots. No Grok Bot needed.
+
+## Using the office
+
+**Header.** How many bots are working, need you, are idle, and how many desks are free. On the
+right: the connection badge (with **Reconnect** if it drops), a speaker for the chime, and a
+bell for system notifications when the tab is in the background.
+
+**Team.** One row per bot, the ones that need you first. Click a bot here or in the office to
+select it: the camera moves to it and its details open.
+
+**Bot details.** Its task, progress (when the bot declares steps), its replies with times, and
+two buttons: **Open in Grok Bot** brings up that conversation in the app, **Stop** interrupts the
+bot. Click the role to rename it.
+
+**Approvals.** When a bot needs you, its details start with a card that says what it wants to
+do, where, and with what, and only then the buttons:
+
+| The card | What you can do in the office |
+| --- | --- |
+| An action Grok Bot asks you to confirm | **Allow once** or **Deny** |
+| An email draft | **Discard**. Sending stays in Grok Bot, so you review it there. |
+| Payments, sign-ins, publishing and anything else | Nothing: **Open in Grok Bot** takes you there |
+| A question with options from the bot | Answer it in Grok Bot |
+
+One click answers one card. "Always allow" and Auto Review rules stay in Grok Bot. A card
+without readable details, or one that has expired, shows no buttons. A short message confirms
+what happened, and every outcome is written to `~/.grok-office/audit.log` (time, bot, action,
+allowed / denied / expired, decided in the office or in the app).
+
+**States and colors**, the same in the office and in the lists:
+
+| State | Means |
+| --- | --- |
+| 🔵 Coding | Writing code or files |
+| 🟢 Browsing | Searching or reading the web |
+| 🩵 In terminal | Running commands |
+| 🟣 Thinking | Working, no tool in use |
+| 🟠 Needs you | Waiting for your approval or answer |
+| 🔴 Error | Something failed |
+| 🟢 Done | Finished in the last 10 minutes |
+| ⚪ Idle / Sleeping | Nothing for a while, or its computer is asleep |
+
+Some bots describe their own steps ("cercando sul web", "running commands") instead of showing
+their tools; the office reads the state from those words, and when it can't tell it shows
+Thinking.
+
+**Footer.** The color legend, **Now / Day / Evening / Night**, and **All tasks** to show every
+bot's speech bubble at once.
+
+**Tips.** Add `&stats` to the address for an FPS meter. Run `pnpm link --global` once in this
+folder to get a `grok-office` command that does the same as `pnpm start`.
+
+## Safety
+
+The office can act on your bots, so it is built like a remote control that only you hold:
+
+- It listens only on **127.0.0.1:4317**. Each start makes a new secret link; the browser swaps
+  it for a cookie. Other origins, framing and CORS are refused.
+- It never starts, quits or restarts Grok Bot, and never answers a card on its own.
+- Bot messages are shown as plain text; links open only for http(s).
+
+⚠️ **The debug port.** `grokbot launch` opens a debug port on `127.0.0.1:9333`. While it is open,
+any program on your Mac can act in Grok Bot as you. It isn't reachable from the network, but
+**close it with `grokbot restore`** whenever you're not using the office. Don't expose the
+office with tunnels such as ngrok: that would expose your approvals.
+
+## Troubleshooting
+
+| You see | Do this |
+| --- | --- |
+| Badge says **Disconnected** | Run `grokbot launch`; the office reconnects by itself within ~15 s |
+| "Grok Bot is running, but its window is closed" | Open Grok Bot from the Dock |
+| Bots are **Sleeping** while you use the app | Grok Bot parks the bots' computers when its window stays in the background; bring it to the front |
+| Working bots only ever show **Thinking** | The bot may not report its tools, or `grokbot` isn't the office fork: run `node scripts/setup.mjs` |
+| Something stopped working after a Grok Bot update | Run `grokbot internals`: every line should say `ok`. A `FAIL` means the app changed and the bridge fork needs updating |
+| `grokbot` not found after setup | Check that npm's global bin folder (`npm prefix -g`, then `/bin`) is in your `PATH` |
+
+## How it works
+
+```text
+Grok Bot (cloud)  ⇄  Grok Bot app on your Mac  ⇄  grokbot bridge  ⇄  office server  ⇄  your browser
+                        debug port 9333            (fork)          127.0.0.1:4317
+```
+
+The bridge reads the Grok Bot app through its local debug port. The office server turns what it
+sees into one simple office state and streams it to the page; your clicks go back the same way.
+The full design is in [SPEC.md](SPEC.md); [docs/HANDOFF.md](docs/HANDOFF.md) has the notes on
+the app's internals.
+
+The fork lives as patches in [`bridge-fork/patches/`](bridge-fork/). It adds avatars, the main
+bot, sleeping computers, opening a conversation, tool steps, open questions and approvals. With
+the original bridge the office still works, with fewer details: working bots show as Thinking
+and approvals are answered in the app.
 
 ## Development
 
-Requirements: Node.js 22+, pnpm 10; for the bridge fork also Bun and git.
-
 ```sh
 pnpm install
-pnpm dev --mock   # 5 scripted bots, no Grok Bot needed
-```
-
-The office server prints an `Open:` link with a one-time token; open it (the token is
-swapped for an httpOnly cookie and removed from the address bar).
-
-- Office server: `127.0.0.1:4317` only (WebSocket `/ws`, REST `/api`).
-- Web UI (Vite): `127.0.0.1:5173`, proxied to the server.
-- State on disk in `~/.grok-office/`: `desks.json` (stable desks) and `roles.json`
-  (roles you edited); mock mode uses `desks.mock.json` and `roles.mock.json`.
-- Names like "Ada - Chief of Staff" show as Ada, with role Chief of Staff.
-
-Mock options (environment variables):
-
-- `GBO_MOCK_BOTS=12` runs more bots (copies of the five scripts).
-- `GBO_MOCK_SHOWCASE=1` pins one bot in each state, to check the scene.
-
-The scene draws each bot as its Grok Bot avatar (shape + color), rebuilt from
-primitives in `apps/web/src/avatar/shapes.ts`: the 14 shapes and 11 colors of
-Grok Bot's "Create New Bot" picker.
-
-```sh
-pnpm test        # server and web unit tests
+pnpm dev --mock   # Vite on 127.0.0.1:5173 + server, with demo bots
+pnpm dev          # the same with your real bots
+pnpm test         # server and web tests
 pnpm typecheck
 ```
 
-## Everyday use: one command
+- Server (`apps/server`): Fastify + WebSocket on `127.0.0.1:4317`; sources in `src/sources/`
+  (`bridge.ts` for Grok Bot, `mock.ts` for the demo); state mapping in `status.ts`.
+- Web (`apps/web`): React, React Three Fiber, Zustand, Tailwind; the scene in `src/scene/`, the
+  panels in `src/panels/`, avatars rebuilt from Grok Bot's 14 shapes and 11 colors in
+  `src/avatar/`.
+- Shared types: `packages/shared/src/types.ts`.
+- Data on disk, in `~/.grok-office/`: `desks.json` (each bot keeps its desk), `roles.json` (roles
+  you renamed), `audit.log`; demo mode uses `*.mock.*` files.
+
+Environment variables:
+
+| Variable | Does |
+| --- | --- |
+| `GBO_MOCK_BOTS=12` | More demo bots (copies of the five) |
+| `GBO_MOCK_SHOWCASE=1` | One demo bot pinned in each state |
+| `GBO_PORT` | Office port (default 4317) |
+| `GBO_HOME` | Data folder (default `~/.grok-office`) |
+| `GROKBOT_BIN` | Path to `grokbot` if it isn't on your `PATH` |
+| `GBO_BRIDGE_DIR` | Where `setup.mjs` builds the bridge fork |
+
+The bridge fork by hand, instead of `setup.mjs`:
 
 ```sh
-pnpm start            # your bots through grokbot-bridge (run `grokbot launch` first)
-pnpm start --mock     # the scripted demo bots
+git clone https://github.com/TheSethRose/grokbot-bridge.git ~/.grok-office/grokbot-bridge
+cd ~/.grok-office/grokbot-bridge && git checkout -b office-adapter b905584
+git am /path/to/grok-bot-office/bridge-fork/patches/*.patch
+bun install && bun test && bun run build && npm install -g .
 ```
 
-It builds the UI when it changed, starts the office on `127.0.0.1:4317` serving it,
-and opens your browser with a one-time token (`--no-open` to just print the link).
-Run `pnpm link --global` once in this folder to get the same as a `grok-office`
-command anywhere. (Not `npx grok-office`: this project isn't on npm, and that name
-would fetch whatever someone else publishes under it.)
-
-In the header: the speaker toggles a short chime when a bot starts needing you (it
-plays after your first click or key press on the page, as browsers require), and the
-bell asks permission for system notifications when the tab is in the background.
-Add `&stats` to the URL for an FPS meter.
-
-The server sends `X-Frame-Options: DENY` and a strict Content-Security-Policy
-(scripts only from itself, no framing), since the page can act on your bots.
-
-## With your real bots (grokbot-bridge)
-
-Requirements: the Grok Bot desktop app signed in with at least one Bot, and
-[grokbot-bridge](https://github.com/TheSethRose/grokbot-bridge) installed so that
-`grokbot` is on your PATH (macOS; `GROKBOT_BIN` points elsewhere).
-
-`scripts/setup.mjs` installs the office fork of the bridge; by hand it goes like this. The
-fork adds avatars, the main bot, sleeping computers,
-opening a conversation from the office, the tool each bot is using (coding / browsing /
-terminal) and open questions (needs you). It lives as patches in `bridge-fork/patches/`;
-with the upstream bridge those degrade to defaults and working bots show as thinking.
+**Probing the app.** `scripts/probe-grokbot.mjs` is a read-only look inside Grok Bot, to find
+what a new app version changed. It never clicks or calls app actions and prints only field
+names and short identifiers, never conversation text. Write its output outside the repo and
+check it before sharing:
 
 ```sh
-git clone https://github.com/TheSethRose/grokbot-bridge.git ../grokbot-bridge
-cd ../grokbot-bridge && git checkout -b office-adapter b905584
-git am ../grok-bot-office/bridge-fork/patches/*.patch
-bun install && bun test && bun run build
-npm install -g .   # `grokbot` now runs this fork
-cd ../grok-bot-office
+node scripts/probe-grokbot.mjs > "$TMPDIR/grokbot-probe.json"
+node scripts/probe-grokbot.mjs --watch 90 > "$TMPDIR/grokbot-watch.json"   # make a bot work meanwhile
 ```
 
-Then, each time:
+## License
 
-```sh
-grokbot launch     # restarts Grok Bot with the debug port on 127.0.0.1:9333
-pnpm start         # or `pnpm dev` while developing; no --mock: your bots via the bridge
-grokbot restore    # when you're done: restarts Grok Bot normally, closing the port
-```
-
-The office runs `grokbot status`, `bots --json`, `watch --json`, `office-watch`,
-`read <bot> --json --limit 20`, `stop <bot>` and `open <bot>`. It **never starts, quits or restarts Grok Bot**: the
-bridge relaunches the app when it can't reach the port, so the office runs it with
-`GROKBOT_APP` pointing nowhere and that relaunch fails instead. If you close Grok
-Bot, the badge turns Disconnected and the office keeps retrying; it reconnects by
-itself once you run `grokbot launch` again. If Grok Bot is running but its window is
-closed, open it from the Dock.
-
-**States:** a bot that names its tools shows as coding, browsing or terminal from them; a
-bot that writes its own status line ("cercando sul web", "eseguendo comandi") is read from
-those words, which is a best guess and falls back to thinking. A bot shows Needs you when
-Grok Bot waits on you or when it asked you a question with options you haven't answered.
-
-**Approvals:** select a bot that needs you. The card shows what it would do first, then:
-**Allow once** / **Deny** for Grok Bot's Auto Review cards, **Discard** for an email draft
-(sending a draft stays in Grok Bot), and no buttons for anything else (payments, sign-ins,
-publishing) or when the details aren't readable: "Open in Grok Bot" takes you there.
-"Always allow" and Auto Review rules stay in the app; one click answers one card. Every
-outcome, also expired cards and ones you answered in the app, goes to
-`~/.grok-office/audit.log` (time, bot, action, allowed/denied/expired, office/app).
-
-**Risk of the debug port:** while Grok Bot runs with it, any program on your Mac
-that connects to `127.0.0.1:9333` can act in the app as you. It isn't exposed to the
-network, but close it with `grokbot restore` when you're not using the office.
-
-## Probing the Grok Bot app
-
-`scripts/probe-grokbot.mjs` is a read-only look inside the desktop app, to learn what
-the grokbot-bridge fork needs (avatars, main bot, account handle, tool steps, pending
-approvals, store and method names, the Bot computer's sleep phase):
-
-```sh
-grokbot launch
-node scripts/probe-grokbot.mjs > grokbot-probe.json
-node scripts/probe-grokbot.mjs --watch 90 > grokbot-watch.json   # make a Bot work meanwhile
-grokbot restore
-```
-
-It never clicks or calls app actions; besides reading snapshots it only loads each
-Bot's recent conversation into the transcript store, as `grokbot read` does.
-Conversation text is never printed, only entry kinds, field names and short
-identifier-like values. Run it once more while a Bot has an approval card open to
-capture what a pending approval looks like. Check the file before sharing it.
+MIT, see [LICENSE](LICENSE). Grok Bot is a product of xAI; this project is not affiliated with it.
