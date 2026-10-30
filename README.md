@@ -5,9 +5,33 @@ with live status and approvals. Full spec: [SPEC.md](SPEC.md).
 
 Unofficial project, not affiliated with xAI.
 
+## Set up in one command
+
+On a Mac with the Grok Bot desktop app signed in, and Node.js 22+, pnpm 10, Bun and git
+installed:
+
+```sh
+git clone https://github.com/swissmarley/grok-bot-office.git
+cd grok-bot-office
+node scripts/setup.mjs
+```
+
+It checks the tools (and says how to install a missing one), installs the office, builds the
+office fork of grokbot-bridge from `bridge-fork/patches/` in `~/.grok-office/grokbot-bridge`
+and installs it as `grokbot`. Run it again after pulling to pick up new patches;
+`--bridge-dir <dir>` builds the fork elsewhere, `--no-global` skips installing `grokbot`.
+`pnpm run setup` does the same (not `pnpm setup`, which is a pnpm command of its own). It
+never starts Grok Bot or opens its debug port. Then, each time:
+
+```sh
+grokbot launch     # restarts Grok Bot with the debug port on 127.0.0.1:9333
+pnpm start         # opens the office in your browser
+grokbot restore    # when you're done: closes the debug port
+```
+
 ## Development
 
-Requirements: Node.js 22+, pnpm 10.
+Requirements: Node.js 22+, pnpm 10; for the bridge fork also Bun and git.
 
 ```sh
 pnpm install
@@ -64,7 +88,8 @@ Requirements: the Grok Bot desktop app signed in with at least one Bot, and
 [grokbot-bridge](https://github.com/TheSethRose/grokbot-bridge) installed so that
 `grokbot` is on your PATH (macOS; `GROKBOT_BIN` points elsewhere).
 
-Install the office fork of the bridge: it adds avatars, the main bot, sleeping computers,
+`scripts/setup.mjs` installs the office fork of the bridge; by hand it goes like this. The
+fork adds avatars, the main bot, sleeping computers,
 opening a conversation from the office, the tool each bot is using (coding / browsing /
 terminal) and open questions (needs you). It lives as patches in `bridge-fork/patches/`;
 with the upstream bridge those degrade to defaults and working bots show as thinking.

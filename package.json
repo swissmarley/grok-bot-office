@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "setup": "node scripts/setup.mjs",
     "dev": "node scripts/dev.mjs",
     "start": "node scripts/start.mjs",
     "typecheck": "pnpm -r typecheck",
