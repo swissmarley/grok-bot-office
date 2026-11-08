@@ -4,7 +4,7 @@
 doing right now, and taps you on the shoulder when it needs you. Approve or deny its actions
 with one click, without digging through logs.
 
-![The office: one bot in every state, with what each is doing above its head](docs/milestones/m1-all-states-day.png)
+![The office: one bot in every state, with what each is doing above its head](readme-images/m1-all-states-day.png)
 
 > Unofficial project, not affiliated with xAI. It runs only on your Mac, for you. See
 > [DISCLAIMER.md](DISCLAIMER.md).
@@ -38,9 +38,9 @@ with one click, without digging through logs.
 
 | A bot's task and log | An approval waiting for you |
 | --- | --- |
-| ![Selected bot with its task, progress and log](docs/milestones/m2-detail.png) | ![Approval card with Allow once and Deny](docs/milestones/m5-approval.jpg) |
+| ![Selected bot with its task, progress and log](readme-images/m2-detail.png) | ![Approval card with Allow once and Deny](readme-images/m5-approval.jpg) |
 | **Up close: what's on each monitor** | **On your phone** |
-| ![Close-up of bots at their desks in the evening](docs/milestones/m1-closeup-evening.png) | <img src="docs/milestones/m2-mobile.png" alt="Mobile layout with the Team list as a bottom sheet" width="260"> |
+| ![Close-up of bots at their desks in the evening](readme-images/m1-closeup-evening.png) | <img src="readme-images/m2-mobile.png" alt="Mobile layout with the Team list as a bottom sheet" width="260"> |
 
 The screenshots show the demo bots (`pnpm start --mock`).
 
