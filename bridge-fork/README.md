@@ -21,4 +21,5 @@ git push -u origin office-adapter
 npm install -g https://github.com/swissmarley/grokbot-bridge/archive/refs/heads/office-adapter.tar.gz
 ```
 
-Next steps for the fork (tool steps, approvals V2) are in `docs/HANDOFF.md`.
+Capabilities covered by the patches are summarized above; the office design is in the repo root
+[`SPEC.md`](../SPEC.md).
