@@ -6,7 +6,8 @@ with one click, without digging through logs.
 
 ![The office: one bot in every state, with what each is doing above its head](docs/milestones/m1-all-states-day.png)
 
-> Unofficial project, not affiliated with xAI. It runs only on your Mac, for you.
+> Unofficial project, not affiliated with xAI. It runs only on your Mac, for you. See
+> [DISCLAIMER.md](DISCLAIMER.md).
 
 ## Contents
 
@@ -167,8 +168,8 @@ Grok Bot (cloud)  ⇄  Grok Bot app on your Mac  ⇄  grokbot bridge  ⇄  offic
 
 The bridge reads the Grok Bot app through its local debug port. The office server turns what it
 sees into one simple office state and streams it to the page; your clicks go back the same way.
-The full design is in [SPEC.md](SPEC.md); [docs/HANDOFF.md](docs/HANDOFF.md) has the notes on
-the app's internals.
+The full design is in [SPEC.md](SPEC.md). Bridge capabilities and patch list are in
+[`bridge-fork/`](bridge-fork/).
 
 The fork lives as patches in [`bridge-fork/patches/`](bridge-fork/). It adds avatars, the main
 bot, sleeping computers, opening a conversation, tool steps, open questions and approvals. With
